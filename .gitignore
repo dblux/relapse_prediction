@@ -1,0 +1,6 @@
+# Files and directories to ignore
+data/
+dump/
+history/
+.Rhistory
+.RData
