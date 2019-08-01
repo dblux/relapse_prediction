@@ -1,14 +1,33 @@
 #!/usr/bin/env Rscript
 library(dplyr)
 
-# Used in GFS function. Bins score with range [0,1] into intervals
-# E.g. 4 Intervals: Binned into 0.2, 0.4, 0.6, 0.8
-bin <- function(score, num_intervals) {
-  for (i in 1:num_intervals) {
-    if (score <= i/num_intervals) {
-      return (i/(num_intervals+1))
-    }
-  }
+# Min-max scaling function
+# Returns: Scaled vector with range [0,1]
+norm_minmax <- function(vec) {(vec-min(vec))/(max(vec)-min(vec))}
+
+# Trimmed mean scaling
+# Non-log values
+norm_mean_scaling <- function(df, target_mean = 500, trim_percentage = 0.02) {
+  trimmed_mean <- apply(df, 2, mean, trim = trim_percentage)
+  scaling_factor <- target_mean/trimmed_mean
+  scaled_df <- as.data.frame(mapply(function(a,b) a*b, df, scaling_factor))
+  rownames(scaled_df) <- rownames(df)
+  return(scaled_df)
+}
+
+# Quantile normalisation: 0 values are assigned 0 automatically
+# Takes in df where columns are samples and rows are genes
+norm_quantile <- function(df) {
+  zero_filter <- df == 0
+  sort_arr <- apply(df, 2, sort)
+  # Creates reference distribution
+  ref_distr <- apply(sort_arr, 1, mean)
+  rank_arr <- apply(df, 2, rank, ties.method = "first")
+  qnorm_arr <- apply(rank_arr, c(1,2), function(x) ref_distr[x])
+  rownames(qnorm_arr) <- rownames(df)
+  qnorm_df <- as.data.frame(qnorm_arr)
+  qnorm_df[zero_filter] <- 0
+  return(qnorm_df)
 }
 
 # Problem: When there are too many zeros and fewer values are assigned to be 0
@@ -17,6 +36,15 @@ bin <- function(score, num_intervals) {
 # Wilson Goh's paper
 # Dense rank is used
 norm_gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
+  # Bins score with range [0,1] into intervals
+  # E.g. 4 Intervals: Binned into 0.2, 0.4, 0.6, 0.8
+  bin <- function(score, num_intervals) {
+    for (i in 1:num_intervals) {
+      if (score <= i/num_intervals) {
+        return (i/(num_intervals+1))
+      }
+    }
+  }
   cat(sprintf("Top %.2f of expressed genes are assigned GFS scores of 1\n", upper))
   cat(sprintf("Genes below the top %.2f of expressed genes are assigned GFS scores of 0\n", lower))
   # Rank function ranks largest value as 1 [-A is used]
@@ -66,19 +94,6 @@ norm_gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
     }
   }
   return (as.data.frame(ranked_A))
-}
-
-# Quantile normalisation
-# Takes in df where columns are samples and rows are genes
-norm_quantile <- function(df) {
-  sort_arr <- apply(df, 2, sort)
-  # Creates reference distribution
-  ref_distr <- apply(sort_arr, 1, mean)
-  rank_arr <- apply(df, 2, rank, ties.method = "random")
-  qnorm_arr <- apply(rank_arr, c(1,2), function(x) ref_distr[x])
-  rownames(qnorm_arr) <- rownames(df)
-  qnorm_df <- as.data.frame(qnorm_arr)
-  return(qnorm_df)
 }
 
 # Function that calculates the matrix of mean differences from the patient and control matrix
@@ -161,19 +176,19 @@ ttest_onesample <- function(vector, mu) {
 # Naive row-wise two-sample t-test for every probe
 # Does a t-test between every row of matrices a and b
 # Returns a vector of p-values or tstats (length: nrow(a))
-row_ttest <- function(df1, df2, flag = "pvalue") {
-  ttest_vec <- numeric(nrow(df1))
-  names(ttest_vec) <- rownames(df1)
+calc_ttest <- function(df, size_a, flag = "pvalue") {
+  row_pvalue <- function(row_vec) {
+    return(t.test(row_vec[1:size_a], row_vec[-(1:size_a)])$p.value)
+  }
+  
+  row_tstat <- function(row_vec) {
+    return(t.test(row_vec[1:size_a], row_vec[-(1:size_a)])$statistic)
+  }
+  
   if (flag == "pvalue") {
-    for (i in 1:nrow(df1)) {
-      try(ttest_vec[i] <- t.test(df1[i,], df2[i,])$p.value, silent = T)
-    }
-    ttest_vec[is.na(ttest_vec)] <- 1
+    ttest_vec <- apply(df, 1, row_pvalue)  
   } else if (flag == "tstat") {
-    for (i in 1:nrow(df1)) {
-      try(ttest_vec[i] <- t.test(df1[i,], df2[i,])$statistic, silent = T)
-    }
-    ttest_vec[is.na(ttest_vec)] <- 0
+    ttest_vec <- apply(df, 1, row_tstat)
   } else {
     stop("Flag not in options pvalue or tstat..")
   }
@@ -296,14 +311,6 @@ log2_transform <- function(df) {
   return(log2_df)
 }
 
-# Trimmed mean scaling
-# Non-log values
-norm_mean_scaling <- function(df, target_mean = 500, trim_percentage = 0.02) {
-  trimmed_mean <- apply(df, 2, mean, trim = trim_percentage)
-  scaling_factor <- target_mean/trimmed_mean
-  return(mapply(function(a,b) a*b, df, scaling_factor))
-}
-
 # Substring without n last characters
 substring_head <- function(string, n) substring(string, 1, nchar(string) - n)
 
@@ -393,6 +400,3 @@ plot_pca <- function(df, batch_info) {
   return(pc1_pc2)
 }
 
-# Min-max scaling function
-# Returns: Scaled vector with range [0,1]
-norm_minmax <- function(vec) {(vec-min(vec))/(max(vec)-min(vec))}
