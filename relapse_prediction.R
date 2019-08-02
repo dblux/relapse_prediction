@@ -59,27 +59,28 @@ select_probes <- function(df) {
 }
 
 # All dataframes have patients as rows and probesets/features as columns
-calc_erm <- function(leukemia_df, normal_df, response_df) {
-  # Calculation of centroids
-  leukemia_centroid <- apply(leukemia_df, 2, median)
-  
-  # Replace leukemia centroid with D0 centroid
-  # leukemia_centroid <- apply(response_df[1:210,], 2, median)
-  
+calc_erm <- function(leukemia_df, normal_df, response_df, flag = "replace") {
+  num_patients <- nrow(response_df)/2
+  # Calculation of centroids and ERM factor
+  if (flag == "original") {
+    leukemia_centroid <- apply(leukemia_df, 2, median)  
+  } else if (flag == "replace") {
+    # Replace leukemia centroid with D0 centroid
+    leukemia_centroid <- apply(response_df[1:num_patients,], 2, median)  
+  } else {
+    stop("Incorrect flag passed")
+  }
   normal_centroid <- apply(normal_df, 2, median)
-  
   leukemia_normal <- normal_centroid - leukemia_centroid
   l2_norm <- function(vec) sqrt(sum(vec^2))
   erm_factor <- leukemia_normal/l2_norm(leukemia_normal)
   
-  # Assume that patients from rows 1:210 match together with rows 211:420
-  patient_arr <- cbind(response_df[1:210,], response_df[-(1:210),])
-  # dim(patient_arr) = c(210, 1000)
+  # Assume that patients from top rows match correspondingly with bottom rows
+  patient_arr <- cbind(response_df[1:num_patients,],
+                       response_df[-(1:num_patients),])
   # Calculate vector by: D8-D0
-  calc_response_vec <- function(row_vec) {
-    dim_x <- length(row_vec)/2
-    return(row_vec[-(1:dim_x)] - row_vec[1:dim_x])
-  }
+  calc_response_vec <- function(row) row[-(1:num_dim)] - row[1:num_dim]
+  num_dim <- ncol(patient_arr)/2
   response_vec_vstack <- apply(patient_arr, 1, calc_response_vec)
   # Multiplication of erm_factor is propagated through every column
   erm <- colSums(response_vec_vstack * erm_factor)
@@ -133,8 +134,36 @@ plot_roc <- function(score_list, label_vec,
   return(auc_vec)
 }
 
+# Environment: yeoh_metadata
+plot_pca <- function(df, metadata) {
+  pca_obj <- prcomp(t(df))
+  pca_df <- as.data.frame(pca_obj$x[,1:6])
+  eig_value <- (pca_obj$sdev)^2
+  var_pc <- eig_value[1:5]/sum(eig_value)
+  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+  # Create plot_df by concatenating metadata labels to data
+  plot_df <- cbind(metadata[rownames(pca_df), c(3,6)], pca_df)
+  print(plot_df[1:3,])
+  pc1_pc2 <- ggplot(plot_df, aes(x = PC1, y = PC2)) +
+    geom_point(aes(col = factor(batch), shape = factor(time_point)),
+               size = 3, show.legend = F) +
+    xlab(pc_labels[1]) + ylab(pc_labels[2])
+  pc2_pc3 <- ggplot(plot_df, aes(x = PC2, y = PC3)) +
+    geom_point(aes(col = factor(batch), shape = factor(time_point)),
+               size = 3, show.legend = F) +
+    xlab(pc_labels[2]) + ylab(pc_labels[3])
+  pc1_pc3 <- ggplot(plot_df, aes(x = PC1, y = PC3)) +
+    geom_point(aes(col = factor(batch), shape = factor(time_point)),
+               size = 3, show.legend = F) +
+    xlab(pc_labels[1]) + ylab(pc_labels[3])
+  multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3,
+                         ncol = 3, nrow = 1)
+  return(multiplot)
+}
+
 # 2D PCA plot
-pca_2d <- function(df, colour_code, pc_labels) {
+# Arguments: PCA-transformed df
+pca_all <- function(df, colour_code, pc_labels) {
   pc1_pc2 <- ggplot(df, aes(x = PC1, y = PC2)) +
     geom_point(size = 2, col = colour_code, show.legend = F) +
     xlab(pc_labels[1]) + ylab(pc_labels[2])
@@ -292,30 +321,62 @@ gfs_yeoh <- norm_gfs(filtered_yeoh)
 # ggsave("dump/pca-yeoh_gfs.pdf", pca_gfs_yeoh,
 #        width = 12, height = 8)
 
-# Selection of probesets with most variance
-probeset_var <- apply(gfs_yeoh, 1, var)
-top_probesets <- names(sort(probeset_var, decreasing = T)[1:500])
+# Selection of probesets according to paired t-test
+paired_pvalues <- calc_ttest(gfs_yeoh, 210, is_paired = T)
+top_probesets <- sort(paired_pvalues, na.last = NA)[1:500]
 select_gfs_yeoh <- gfs_yeoh[top_probesets,]
-# pca_subset_gfs <- plot_pca(subset_gfs_yeoh)
-# ggsave("dump/pca-yeoh_gfs_subset.pdf", pca_subset_gfs,
-#        width = 12, height = 8)
+
+# # Selection of probesets with most variance
+# probeset_var <- apply(gfs_yeoh, 1, var)
+# top_probesets <- names(sort(probeset_var, decreasing = T)[1:500])
+# select_gfs_yeoh <- gfs_yeoh[top_probesets,]
+
+# plot_select_gfs <- plot_pca(select_gfs_yeoh, yeoh_metadata)
+# plot_select_gfs
+# ggsave("dump/pca-yeoh_gfs_ttest.pdf", plot_select_gfs,
+#        width = 12, height = 4)
+
 gfs_mile <- norm_gfs(filtered_mile)
 select_gfs_mile <- gfs_mile[top_probesets,]
 
 # PCA of all data (centroid, training, test)
-all_pca_obj <- prcomp(t(cbind(select_gfs_yeoh, select_gfs_mile)))
-
-# Top 3 PCs
-pca_arr <- all_pca_obj$x[,1:4]
+pca_obj <- prcomp(t(cbind(select_gfs_yeoh, select_gfs_mile)))
+# Top 3 PCs without batch effects
+pca_arr <- pca_obj$x[,1:3]
 response_df <- pca_arr[1:420,]
 leukemia_df <- pca_arr[421:1170,]
 normal_df <- pca_arr[1171:1244,]
 
+# PCA of D0 and normal data
+basis_data <- t(cbind(select_gfs_yeoh[1:210], select_gfs_mile[751:824]))
+pca_obj <- prcomp(pca_data)
+pca_basis <- pca_obj$x[,1:4]
+# Projection of D8 and leukemia data
+add_data <- t(cbind(select_gfs_yeoh[-(1:210)], select_gfs_mile[-(751:824)]))
+pca_add <- predict(pca_obj, add_data)[,1:4]
+pca_arr <- rbind(pca_basis[1:210,],
+                 pca_add[1:210,],
+                 pca_add[-(1:210),],
+                 pca_basis[-(1:210),])
+response_df <- pca_arr[1:420,]
+leukemia_df <- pca_arr[421:1170,]
+normal_df <- pca_arr[1171:1244,]
+
+# Batch information of yeoh is encoded
+names_index <- rownames(pca_arr)[1:210]
+head(names_index)
+batch_info <- yeoh_metadata[names_index,6]
+batch_palette <- brewer.pal(9, "Set1")
+batch_colour <- c(batch_palette[batch_info],
+                  rep("darkolivegreen3", 74))
+
 # PCA: Eigenvalues
-eig_value <- (all_pca_obj$sdev)^2
+eig_value <- (pca_obj$sdev)^2
 var_pc <- eig_value[1:5]/sum(eig_value)
 pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
 
+plot_pca <- pca_all(as.data.frame(pca_arr), batch_colour, pc_labels)
+plot_pca
 erm <- calc_erm(leukemia_df, normal_df, response_df)
 
 # PCA PLOT ----------------------------------------------------------------
@@ -368,23 +429,6 @@ vectors_plot
 ggsave("dump/vectors-gfs.pdf", vectors_plot,
        width = 12, height = 6)
 
-# plot_centroids <- function(centroid_df, pc_labels) {
-#   pc1_pc2 <- ggplot(data = centroid_df) +
-#     geom_point(aes(x = PC1, y = PC2),
-#                size = 5, colour = c("steelblue4", "turquoise3", "tomato3", "darkolivegreen3")) +
-#     xlab(pc_labels[1]) + ylab(pc_labels[2])
-#   pc2_pc3 <- ggplot(data = centroid_df) +
-#     geom_point(data = centroid_df, aes(x = PC2, y = PC3),
-#                size = 5, colour = c("steelblue4", "turquoise3", "tomato3", "darkolivegreen3")) +
-#     xlab(pc_labels[2]) + ylab(pc_labels[3])
-#   multiplot <- plot_grid(pc1_pc2, pc2_pc3, ncol = 2)
-#   return(multiplot)
-# }
-
-# centroids_plot <- plot_centroids(as.data.frame(centroid_df), pc_labels)
-# ggsave("dump/centroids-gfs.pdf", centroids_plot,
-#        width = 12, height = 6)
-
 # RESULTS -----------------------------------------------------------------
 ### Extracting truth labels and training/test
 labels_yeoh <- yeoh_metadata[names(erm), c(6, 8, 12)]
@@ -394,7 +438,7 @@ head(results_df)
 results_df[results_df$event_code == 2, 4] <- 1
 # results_df <- results_df[order(results_df$erm),]
 
-write.table(results_df, "dump/results-gfs.tsv",
+write.table(results_df, "dump/results-gfs_ttest_pca_all.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 write.table(results_df, "dump/remove_centroid/results-gfs.tsv",

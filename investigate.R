@@ -47,6 +47,8 @@ x <- selected_data[allzero_logical,]
 # S3 method of class: predict.prcomp
 # Projection into PCA space of MILE data
 projected_arr <- predict(pca_obj, t(selected_data))
+getS3method("predict", "prcomp")
+
 incremental_df <- as.data.frame(rbind(pca_arr, projected_arr[,1:4]))
 
 # Colour code

@@ -175,14 +175,17 @@ ttest_onesample <- function(vector, mu) {
 
 # Naive row-wise two-sample t-test for every probe
 # Does a t-test between every row of matrices a and b
-# Returns a vector of p-values or tstats (length: nrow(a))
-calc_ttest <- function(df, size_a, flag = "pvalue") {
+# Arguments: Dataframe with both clases, size of class A, ...
+calc_ttest <- function(df, size_a, flag = "pvalue", is_paired = F) {
   row_pvalue <- function(row_vec) {
-    return(t.test(row_vec[1:size_a], row_vec[-(1:size_a)])$p.value)
+    return(t.test(row_vec[1:size_a],
+                  row_vec[-(1:size_a)],
+                  paired = is_paired)$p.value)
   }
-  
   row_tstat <- function(row_vec) {
-    return(t.test(row_vec[1:size_a], row_vec[-(1:size_a)])$statistic)
+    return(t.test(row_vec[1:size_a],
+                  row_vec[-(1:size_a)],
+                  paired = is_paired)$statistic)
   }
   
   if (flag == "pvalue") {
