@@ -163,21 +163,21 @@ plot_pca <- function(df, metadata) {
 
 # 2D PCA plot
 # Arguments: PCA-transformed df
-pca_all <- function(df, colour_code, pc_labels) {
+pca_all <- function(df, colour_code, shape_vec, pc_labels) {
   pc1_pc2 <- ggplot(df, aes(x = PC1, y = PC2)) +
-    geom_point(size = 2, col = colour_code, show.legend = F) +
+    geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
     xlab(pc_labels[1]) + ylab(pc_labels[2])
   pc2_pc3 <- ggplot(df, aes(x = PC2, y = PC3)) +
-    geom_point(size = 2, col = colour_code, show.legend = F) +
+    geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
     xlab(pc_labels[2]) + ylab(pc_labels[3])
   pc1_pc3 <- ggplot(df, aes(x = PC1, y = PC3)) +
-    geom_point(size = 2, col = colour_code, show.legend = F) +
+    geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
     xlab(pc_labels[1]) + ylab(pc_labels[3])
-  pc3_pc4 <- ggplot(df, aes(x = PC3, y = PC4)) +
-    geom_point(size = 2, col = colour_code, show.legend = F) +
-    xlab(pc_labels[3]) + ylab(pc_labels[4])
-  multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3, pc3_pc4,
-                         ncol = 2, nrow = 2)
+  # pc3_pc4 <- ggplot(df, aes(x = PC3, y = PC4)) +
+  #   geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
+  #   xlab(pc_labels[3]) + ylab(pc_labels[4])
+  multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3,
+                         ncol = 3, nrow = 1)
   return(multiplot)
 }
 
@@ -320,10 +320,17 @@ gfs_yeoh <- norm_gfs(filtered_yeoh)
 # pca_gfs_yeoh <- plot_pca(gfs_yeoh)
 # ggsave("dump/pca-yeoh_gfs.pdf", pca_gfs_yeoh,
 #        width = 12, height = 8)
+gfs_mile <- norm_gfs(filtered_mile)
 
-# Selection of probesets according to paired t-test
+# Selection of probesets according to paired t-test between D0 and D8
 paired_pvalues <- calc_ttest(gfs_yeoh, 210, is_paired = T)
-top_probesets <- sort(paired_pvalues, na.last = NA)[1:500]
+top_probesets <- names(sort(paired_pvalues, na.last = NA))[1:500]
+select_gfs_yeoh <- gfs_yeoh[top_probesets,]
+
+# Selection of probesets according to unpaired t-test between normal and D0
+d0_normal <- cbind(gfs_yeoh[,1:210], gfs_mile[,751:824])
+unpaired_pvalues <- calc_ttest(d0_normal, 210, is_paired = F)
+top_probesets <- names(sort(paired_pvalues, na.last = NA))[1:500]
 select_gfs_yeoh <- gfs_yeoh[top_probesets,]
 
 # # Selection of probesets with most variance
@@ -336,7 +343,7 @@ select_gfs_yeoh <- gfs_yeoh[top_probesets,]
 # ggsave("dump/pca-yeoh_gfs_ttest.pdf", plot_select_gfs,
 #        width = 12, height = 4)
 
-gfs_mile <- norm_gfs(filtered_mile)
+
 select_gfs_mile <- gfs_mile[top_probesets,]
 
 # PCA of all data (centroid, training, test)
@@ -349,34 +356,29 @@ normal_df <- pca_arr[1171:1244,]
 
 # PCA of D0 and normal data
 basis_data <- t(cbind(select_gfs_yeoh[1:210], select_gfs_mile[751:824]))
-pca_obj <- prcomp(pca_data)
+pca_obj <- prcomp(basis_data)
 pca_basis <- pca_obj$x[,1:4]
 # Projection of D8 and leukemia data
 add_data <- t(cbind(select_gfs_yeoh[-(1:210)], select_gfs_mile[-(751:824)]))
 pca_add <- predict(pca_obj, add_data)[,1:4]
-pca_arr <- rbind(pca_basis[1:210,],
-                 pca_add[1:210,],
-                 pca_add[-(1:210),],
-                 pca_basis[-(1:210),])
-response_df <- pca_arr[1:420,]
-leukemia_df <- pca_arr[421:1170,]
-normal_df <- pca_arr[1171:1244,]
+plot_arr <- rbind(pca_basis[1:210,],
+                  pca_add[1:210,],
+                  pca_basis[-(1:210),])
 
-# Batch information of yeoh is encoded
-names_index <- rownames(pca_arr)[1:210]
-head(names_index)
-batch_info <- yeoh_metadata[names_index,6]
-batch_palette <- brewer.pal(9, "Set1")
-batch_colour <- c(batch_palette[batch_info],
-                  rep("darkolivegreen3", 74))
+pca_arr <- rbind(pca_basis[1:210, c(1,3,4)],
+                 pca_add[1:210, c(1,3,4)],
+                 pca_basis[-(1:210), c(1,3,4)],
+                 pca_add[-(1:210), c(1,3,4)])
+colnames(pca_arr)
+response_df <- pca_arr[1:420,]
+normal_df <- pca_arr[421:494,]
+leukemia_df <- pca_arr[495:1244,]
 
 # PCA: Eigenvalues
 eig_value <- (pca_obj$sdev)^2
 var_pc <- eig_value[1:5]/sum(eig_value)
 pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
 
-plot_pca <- pca_all(as.data.frame(pca_arr), batch_colour, pc_labels)
-plot_pca
 erm <- calc_erm(leukemia_df, normal_df, response_df)
 
 # PCA PLOT ----------------------------------------------------------------
@@ -397,6 +399,19 @@ all_colour <- c(rep(c("steelblue4", "turquoise3"), c(210, 210)),
 # Colour information
 centroid_colour <- c(rep(c("steelblue4", "turquoise3"), c(210, 210)),
                      rep("tomato3", 1), rep("darkolivegreen3", 1))
+
+# Batch information of yeoh is encoded
+names_index <- rownames(pca_arr)[1:210]
+head(names_index)
+batch_info <- yeoh_metadata[names_index,6]
+batch_palette <- brewer.pal(9, "Blues")
+batch_colour <- c(batch_palette[batch_info],
+                  batch_palette[batch_info],
+                  rep("tomato3", 750),
+                  rep("darkolivegreen3", 74))
+batch_shape <- c(rep(17, 210),
+                 rep(19, 210+750+74))
+
 # Dataframe to be visualised
 visualise_arr <- rbind(response_df,
                        apply(leukemia_df, 2, median),
@@ -404,11 +419,12 @@ visualise_arr <- rbind(response_df,
 
 timepoint_vec <- c(rep(c(19, 17), each = 210), 19, 19)
 
-plot_pca <- pca_2d(as.data.frame(pca_arr), all_colour, pc_labels)
-# plot_pca <- pca_2d(as.data.frame(visualise_arr), centroid_colour, pc_labels)
+plot_pca <- pca_all(as.data.frame(pca_arr), batch_colour,
+                    batch_shape, pc_labels)
 plot_pca
-ggsave("dump/pca-gfs.pdf", plot_pca,
-       width = 9, height = 9)
+dev.new()
+ggsave("dump/pca_all-gfs_ttest_d0d8.pdf", plot_pca,
+       width = 12, height = 4)
 
 # Visualising vectors
 arrows_df <- cbind(response_df[1:210,], response_df[-(1:210),])
@@ -421,12 +437,11 @@ centroid_df <- rbind(apply(response_df[1:210,], 2, median),
                      apply(leukemia_df, 2, median),
                      apply(normal_df, 2, median))
 
-
 vectors_plot <- plot_vectors(as.data.frame(arrows_df),
                              as.data.frame(centroid_df),
                              pc_labels)
 vectors_plot
-ggsave("dump/vectors-gfs.pdf", vectors_plot,
+ggsave("dump/vectors-gfs_ttest_d0d8_pca_basis_top3.pdf", vectors_plot,
        width = 12, height = 6)
 
 # RESULTS -----------------------------------------------------------------
@@ -438,11 +453,12 @@ head(results_df)
 results_df[results_df$event_code == 2, 4] <- 1
 # results_df <- results_df[order(results_df$erm),]
 
-write.table(results_df, "dump/results-gfs_ttest_pca_all.tsv",
+write.table(results_df, "dump/results-gfs_ttest_d0d8_pca_basis_choose3.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 write.table(results_df, "dump/remove_centroid/results-gfs.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
+
 # Investigate
 results_list <- split(results_df, results_df[,2])
 results_list[[1]]
