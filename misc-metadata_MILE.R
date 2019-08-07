@@ -1,3 +1,5 @@
+library(ggplot2)
+
 subtype_annot <- read.table("data/GSE13204/README/subtype_annot.txt",
                             header = F, row.names = 1)
 subtype_df <- t(subtype_annot)
@@ -80,3 +82,18 @@ mas5_ordered <- mas5_commonprobes[,order(colnames(mas5_commonprobes))]
 write.table(mas5_ordered, "data/GSE13204/processed/mas5_ordered.tsv",
             quote = F, sep = "\t")
 saveRDS(mas5_ordered, "data/GSE13204/processed/mas5_ordered.rds")
+
+
+# Batch information -------------------------------------------------------
+mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
+                            sep = "\t", header = T, row.names = 1)
+
+mile_metadata[,3] <- as.Date(strptime(mile_metadata[, 3], format = "%Y-%m-%d"))
+# # Convert dates to the same month
+# yeoh_metadata$month <- as.Date(cut(yeoh_metadata$scan_date, breaks = "month"))
+
+plot_date <- ggplot(mile_metadata, aes(x = scan_date)) +
+  geom_bar(show.legend = F) +
+  # xlim(as.Date(c("2003-01-01", "2016-01-01"))) +
+  # scale_x_date(date_breaks = "12 months", date_minor_breaks = "1 months") +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))

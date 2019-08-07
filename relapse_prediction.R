@@ -333,7 +333,6 @@ d0_normal <- cbind(gfs_yeoh[,1:210], gfs_mile[,751:824])
 # Filtering of new combined df
 selected_probes1 <- filter_probesets(d0_normal, 0.2)
 unpaired_pvalues <- calc_ttest(d0_normal[selected_probes1,], 210, is_paired = F)
-
 top_probesets <- names(sort(unpaired_pvalues, na.last = NA))[1:500]
 select_gfs_yeoh <- gfs_yeoh[top_probesets,]
 select_gfs_mile <- gfs_mile[top_probesets,]
@@ -357,12 +356,12 @@ leukemia_df <- pca_arr[421:1170,]
 normal_df <- pca_arr[1171:1244,]
 
 # PCA of D0 and normal data
-basis_data <- t(cbind(select_gfs_yeoh[1:210], select_gfs_mile[751:824]))
+basis_data <- t(cbind(select_gfs_yeoh[,1:210], select_gfs_mile[,751:824]))
 rownames(basis_data)
 pca_obj <- prcomp(basis_data)
 pca_basis <- pca_obj$x[,1:4]
 # Projection of D8 and leukemia data
-add_data <- t(cbind(select_gfs_yeoh[-(1:210)], select_gfs_mile[-(751:824)]))
+add_data <- t(cbind(select_gfs_yeoh[,-(1:210)], select_gfs_mile[,-(751:824)]))
 pca_add <- predict(pca_obj, add_data)[,1:4]
 plot_arr <- rbind(pca_basis[1:210,],
                   pca_add[1:210,],
@@ -434,9 +433,45 @@ ordered_mnn_yeoh1 <- cbind(ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh)
                            ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "8")])
 
 plot_mnn <- plot_pca(ordered_mnn_yeoh1, yeoh_metadata)
+plot_mnn
 ggsave("dump/pca-yeoh_mnn.pdf", plot_mnn,
        width = 12, height = 4)
 
+mnn_data_obj <- mnnCorrect(ordered_mnn_yeoh1, data.matrix(log_mile))
+mnn_data <- do.call(cbind, mnn_data_obj$corrected)
+colnames(mnn_data) <- c(colnames(ordered_mnn_yeoh1), colnames(log_mile))
+colnames(mnn_data)
+ncol(mnn_data)
+1244-74
+# PCA of D0 and normal data
+basis_data <- t(mnn_data[, c(1:210, 1171:1244)])
+rownames(basis_data)
+pca_obj <- prcomp(basis_data)
+pca_basis <- pca_obj$x[,1:4]
+# Projection of D8 and leukemia data
+add_data <- t(mnn_data[, -c(1:210, 1171:1244)])
+rownames(add_data)
+pca_add <- predict(pca_obj, add_data)[,1:4]
+plot_arr <- rbind(pca_basis[1:210,],
+                  pca_add[1:210,],
+                  pca_basis[-(1:210),])
+# PCA: Eigenvalues
+eig_value <- (pca_obj$sdev)^2
+var_pc <- eig_value[1:5]/sum(eig_value)
+pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+
+pca_arr <- rbind(pca_basis[1:210,],
+                 pca_add[1:210,],
+                 pca_basis[-(1:210),],
+                 pca_add[-(1:210),])
+
+response_df <- pca_arr[1:420, 1:3]
+normal_df <- pca_arr[421:494, 1:3]
+leukemia_df <- pca_arr[495:1244, 1:3]
+rownames(leukemia_df)
+erm <- calc_erm(response_df, normal_df)
+
+# Hierachical clustering --------------------------------------------------
 pairwise_dist <- dist(t(ordered_mnn_yeoh1[,1:210]))
 hcluster <- hclust(pairwise_dist)
 dendo_obj <- as.dendrogram(hcluster)
@@ -479,7 +514,7 @@ centroid_colour <- c(rep(c("steelblue4", "turquoise3"), c(210, 210)),
                      rep("tomato3", 1), rep("darkolivegreen3", 1))
 
 # Batch information of yeoh is encoded
-names_index <- rownames(pca_arr)[1:210]
+names_index <- rownames(plot_arr)[1:210]
 head(names_index)
 batch_info <- yeoh_metadata[names_index,6]
 batch_palette <- brewer.pal(9, "Blues")
@@ -489,20 +524,17 @@ batch_colour <- c(batch_palette[batch_info],
 batch_shape <- c(rep(17, 210),
                  rep(19, 210+74))
 
-# Dataframe to be visualised
-visualise_arr <- rbind(response_df,
-                       apply(leukemia_df, 2, median),
-                       apply(normal_df, 2, median))
-
-timepoint_vec <- c(rep(c(19, 17), each = 210), 19, 19)
-
-rownames(plot_arr)
 plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
                     batch_shape, pc_labels)
 plot_pca
 dev.new()
-ggsave("dump/pca_basis-quantile_d0normal.pdf", plot_pca,
+ggsave("dump/pca_basis-mnn_d0d8.pdf", plot_pca,
        width = 9, height = 9)
+
+# # Dataframe to be visualised
+# visualise_arr <- rbind(response_df,
+#                        apply(leukemia_df, 2, median),
+#                        apply(normal_df, 2, median))
 
 # Visualising vectors
 arrows_df <- cbind(response_df[1:210,], response_df[-(1:210),])
@@ -512,34 +544,34 @@ colnames(arrows_df) <- paste(colnames(arrows_df),
                              sep = "_")
 centroid_df <- rbind(apply(response_df[1:210,], 2, median),
                      apply(response_df[-(1:210),], 2, median),
-                     # apply(leukemia_df, 2, median),
+                     apply(leukemia_df, 2, median),
                      apply(normal_df, 2, median))
 plot_vectors <- function(df, centroid_df, pc_labels) {
-  pc1_pc2 <- ggplot(data = df) +
+  pca_1 <- ggplot(data = df) +
     geom_point(aes(x = PC1_A, y = PC2_A), size = 3,
                col = "steelblue4", show.legend = F) +
     geom_point(aes(x = PC1_B, y = PC2_B), size = 3,
                col = "turquoise3", show.legend = F) +
     geom_point(data = centroid_df, aes(x = PC1, y = PC2),
-               size = 5, shape = 17, colour = c("purple4", "violet", "darkolivegreen3")) +
+               size = 5, shape = 17, colour = c("purple4", "violet", "tomato3", "darkolivegreen3")) +
     geom_segment(aes(x = PC1_A, y = PC2_A,
                      xend = PC1_B, yend = PC2_B),
                  arrow = arrow(length = unit(0.3, "cm")),
                  alpha = 0.5) +
     xlab(pc_labels[1]) + ylab(pc_labels[2])
-  pc2_pc4 <- ggplot(data = df) +
-    geom_point(aes(x = PC2_A, y = PC4_A), size = 3,
+  pca_2 <- ggplot(data = df) +
+    geom_point(aes(x = PC2_A, y = PC3_A), size = 3,
                col = "steelblue4", show.legend = F) +
-    geom_point(aes(x = PC2_B, y = PC4_B), size = 3,
+    geom_point(aes(x = PC2_B, y = PC3_B), size = 3,
                col = "turquoise3", show.legend = F) +
-    geom_point(data = centroid_df, aes(x = PC2, y = PC4),
-               size = 5, shape = 17, colour = c("purple4", "violet", "darkolivegreen3")) +
-    geom_segment(aes(x = PC2_A, y = PC4_A,
-                     xend = PC2_B, yend = PC4_B),
+    geom_point(data = centroid_df, aes(x = PC2, y = PC3),
+               size = 5, shape = 17, colour = c("purple4", "violet", "tomato3", "darkolivegreen3")) +
+    geom_segment(aes(x = PC2_A, y = PC3_A,
+                     xend = PC2_B, yend = PC3_B),
                  arrow = arrow(length = unit(0.3, "cm")),
                  alpha = 0.5) +
-    xlab(pc_labels[2]) + ylab(pc_labels[4])
-  multiplot <- plot_grid(pc1_pc2, pc2_pc4, ncol = 2)
+    xlab(pc_labels[2]) + ylab(pc_labels[3])
+  multiplot <- plot_grid(pca_1, pca_2, ncol = 2)
   return(multiplot)
 }
 
@@ -548,7 +580,7 @@ vectors_plot <- plot_vectors(as.data.frame(arrows_df),
                              pc_labels)
 vectors_plot
 
-ggsave("dump/vectors-qnorm_d0normal_pca_basis_choose3.pdf", vectors_plot,
+ggsave("dump/vectors-mnn_d0d8_pca_basis_top3.pdf", vectors_plot,
        width = 12, height = 6)
 
 # RESULTS -----------------------------------------------------------------
@@ -558,9 +590,8 @@ results_df <- cbind(erm, labels_yeoh)
 head(results_df)
 # Change truth labels with value 2 to 1
 results_df[results_df$event_code == 2, 4] <- 1
-# results_df <- results_df[order(results_df$erm),]
 
-write.table(results_df, "dump/results-qnorm_d0d8_pca_basis_top3.tsv",
+write.table(results_df, "dump/results-mnn_d0d8_pca_basis_top3.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 write.table(results_df, "dump/remove_centroid/results-gfs.tsv",
@@ -581,32 +612,23 @@ save_fig(results_roc, ROC_WPATH,
          width = 9, height = 9)
 
 # RETROSPECTIVE -----------------------------------------------------------
-results_1 <- read.table("dump/results-gfs_ttest_pca_all.tsv",
+results_1 <- read.table("dump/results-mnn_d0d8_pca_basis_top3.tsv",
                         sep = "\t", header = T, row.names = 1)
-results_2 <- read.table("dump/results-gfs_ttest_d0d8_pca_basis_choose3.tsv",
+results_2 <- read.table("dump/results-qnorm_d0d8_pca_basis_top3.tsv",
                         sep = "\t", header = T, row.names = 1)
 results_3 <- read.table("dump/results-gfs_ttest_d0d8_pca_basis_top3.tsv",
-                        sep = "\t", header = T, row.names = 1)
-results_4 <- read.table("dump/results-gfs_ttest_d0normal_pca_basis_choose3.tsv",
-                        sep = "\t", header = T, row.names = 1)
-results_5 <- read.table("dump/results-gfs_ttest_d0normal_pca_basis_top3.tsv",
                         sep = "\t", header = T, row.names = 1)
 
 labels_vec <- results_1[order(rownames(results_1)), 4]
 results1_vec <- results_1[order(rownames(results_1)), 1]
 results2_vec <- results_2[order(rownames(results_2)), 1]
 results3_vec <- results_3[order(rownames(results_3)), 1]
-results4_vec <- results_4[order(rownames(results_4)), 1]
-results5_vec <- results_5[order(rownames(results_5)), 1]
-length(results5_vec)
 
 par(mar = rep(5,4))
-plot_roc(list(results1_vec, results2_vec, results3_vec, results4_vec, results5_vec), labels_vec,
-         name_vec = c("PCA (All)",
-                      "D0-D8, 3 PCs", "D0-D8, Top 3 PCs",
-                      "D0-Normal, 3 PCs", "D0-Normal, Top 3 PCs"))
+plot_roc(list(results1_vec, results2_vec, results3_vec), labels_vec,
+         name_vec = c("MNN", "Quantile", "GFS"))
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/results-gfs.pdf",
+save_fig(results_roc, "dump/results-comparison.pdf",
          width = 9, height = 9)
 
 # yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
