@@ -207,6 +207,8 @@ mile_mean <- plot_mean(mile_data,
 ggsave("dump/trimmed_mean-mile.pdf", mile_mean,
        width = 9, height = 9)
 
+logfc <- calc_logfc(yeoh_data[,1:210], yeoh_data[,-(1:210)])
+
 # DIFENG ------------------------------------------------------------------
 # Trimmed-mean scaling
 scaled_yeoh <- norm_mean_scaling(yeoh_data)

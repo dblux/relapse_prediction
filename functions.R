@@ -189,9 +189,9 @@ calc_ttest <- function(df, size_a, flag = "pvalue", is_paired = F) {
   }
   
   if (flag == "pvalue") {
-    ttest_vec <- apply(df, 1, row_pvalue)  
+    ttest_vec <- apply(df, 1, function(row) tryCatch(row_pvalue(row), error = function(e) NA))
   } else if (flag == "tstat") {
-    ttest_vec <- apply(df, 1, row_tstat)
+    ttest_vec <- apply(df, 1, function(row) tryCatch(row_tstat(row), error = function(e) NA))
   } else {
     stop("Flag not in options pvalue or tstat..")
   }
@@ -402,4 +402,3 @@ plot_pca <- function(df, batch_info) {
                show.legend = F)
   return(pc1_pc2)
 }
-
