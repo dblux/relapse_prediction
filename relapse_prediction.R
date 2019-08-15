@@ -1,8 +1,8 @@
 # library(Rtsne)
-library(scran)
+# library(scran)
 library(ggplot2)
 library(cowplot)
-library(dendextend)
+# library(dendextend)
 library(rgl)
 library(reshape2)
 library(RColorBrewer)
@@ -62,7 +62,7 @@ select_probes <- function(df) {
 }
 
 # All dataframes have patients as rows and probesets/features as columns
-calc_erm <- function(response_df, normal_df, leukemia_df = NA, flag = "replace") {
+calc_erm1 <- function(response_df, normal_df, leukemia_df = NA, flag = "replace") {
   num_patients <- nrow(response_df)/2
   # Calculation of centroids and ERM factor
   if (flag == "replace") {
@@ -87,6 +87,28 @@ calc_erm <- function(response_df, normal_df, leukemia_df = NA, flag = "replace")
   response_vec_vstack <- apply(patient_arr, 1, calc_response_vec)
   # Multiplication of erm_factor is propagated through every column
   erm <- colSums(response_vec_vstack * erm_factor)
+  return(erm)
+}
+
+# All dataframes have patients as rows and probesets/features as columns
+calc_erm2 <- function(response_df, normal_df, leukemia_df = NA) {
+  num_patients <- nrow(response_df)/2
+  normal_centroid <- apply(normal_df, 2, median)
+  l2_norm <- function(vec) sqrt(sum(vec^2))
+  # D0-Normal vectors for each patient
+  base_vec_vstack <- normal_centroid - response_df[1:num_patients,]
+  l2norm_base <- apply(base_vec_vstack, 1, l2_norm)
+  # Divided by l2norm
+  unit_base_vstack <- base_vec_vstack/l2norm_base
+  # Assume that patients from top rows match correspondingly with bottom rows
+  patient_arr <- cbind(response_df[1:num_patients,],
+                       response_df[-(1:num_patients),])
+  # Calculate vector by: D8-D0
+  calc_response_vec <- function(row) row[-(1:num_dim)] - row[1:num_dim]
+  num_dim <- ncol(patient_arr)/2
+  response_vec_vstack <- apply(patient_arr, 1, calc_response_vec)
+  # Element-wise multiplication of two df
+  erm <- rowSums(unit_base_vstack * t(response_vec_vstack))
   return(erm)
 }
 
@@ -194,7 +216,6 @@ mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
                         sep = "\t", header = T, row.names = 1)
 mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
                             sep = "\t", header = T, row.names = 1)
-colnames(mile_data)
 
 yeoh_mean <- plot_mean(yeoh_data,
                        yeoh_metadata$batch,
@@ -209,9 +230,17 @@ ggsave("dump/trimmed_mean-mile.pdf", mile_mean,
 
 logfc <- calc_logfc(yeoh_data[,1:210], yeoh_data[,-(1:210)])
 
+yeoh_metadata[yeoh_metadata$batch == 9,]
+
 # DIFENG ------------------------------------------------------------------
+colnames(yeoh_data)
+chosen_pid <- rownames(yeoh_metadata)[yeoh_metadata$batch == 9]
+batch_yeoh <- yeoh_data[,chosen_pid]
+batch_yeoh <- cbind(batch_yeoh[,c(endsWith(colnames(batch_yeoh), "D0"))],
+                    batch_yeoh[,c(endsWith(colnames(batch_yeoh), "D8"))])
+
 # Trimmed-mean scaling
-scaled_yeoh <- norm_mean_scaling(yeoh_data)
+scaled_yeoh <- norm_mean_scaling(batch_yeoh)
 scaled_mile <- norm_mean_scaling(mile_data)
 # Pre-processing of yeoh_data
 selected_probes <- filter_probesets(scaled_yeoh, 0.2)
@@ -225,24 +254,27 @@ filtered_mile <- scaled_mile[selected_probes,]
 
 # Quantile normalise by time point
 colnames(filtered_mile[,751:824])
-qnorm_d0 <- norm_quantile(filtered_yeoh[,1:210])
-qnorm_d8 <- norm_quantile(filtered_yeoh[,-(1:210)])
+colnames(filtered_yeoh[,1:29])
+colnames(filtered_yeoh[,30:58])
+
+qnorm_d0 <- norm_quantile(filtered_yeoh[,1:29])
+qnorm_d8 <- norm_quantile(filtered_yeoh[,-(1:29)])
 qnorm_normal <- norm_quantile(filtered_mile[,751:824])
 
 # Selecting drug responsive genes between D0 and D8
-ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_d8), 210, is_paired = T)
+ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_d8), 29, is_paired = T)
 log_fc <- calc_logfc(qnorm_d0, qnorm_d8)
 pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
 fc_probesets <- names(log_fc)[log_fc > 1]
 intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
 print(length(intersect_probesets))
 
-# Selecting drug responsive genes between D0 and normal
-ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_normal), 210, is_paired = F)
-log_fc <- calc_logfc(qnorm_d0, qnorm_normal)
-fc_probesets <- names(log_fc)[log_fc > 2]
-intersect_probesets <- names(sort(ttest_pvalue[fc_probesets])[1:500])
-print(length(intersect_probesets))
+# # Selecting drug responsive genes between D0 and normal
+# ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_normal), 210, is_paired = F)
+# log_fc <- calc_logfc(qnorm_d0, qnorm_normal)
+# fc_probesets <- names(log_fc)[log_fc > 2]
+# intersect_probesets <- names(sort(ttest_pvalue[fc_probesets])[1:500])
+# print(length(intersect_probesets))
 
 log_d0 <- log2_transform(qnorm_d0[intersect_probesets,])
 log_d8 <- log2_transform(qnorm_d8[intersect_probesets,])
@@ -256,9 +288,9 @@ pca_basis <- pca_obj$x[,1:4]
 # Projection of D8 data
 add_data <- t(log_d8)
 pca_add <- predict(pca_obj, add_data)[,1:4]
-plot_arr <- rbind(pca_basis[1:210,],
+plot_arr <- rbind(pca_basis[1:29,],
                   pca_add,
-                  pca_basis[-(1:210),])
+                  pca_basis[-(1:29),])
 
 # PCA: Eigenvalues
 eig_value <- (pca_obj$sdev)^2
@@ -268,10 +300,14 @@ pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
 pca_arr <- plot_arr[,1:3]
 colnames(pca_arr)
 dim(pca_arr)
-response_df <- pca_arr[1:420,]
-normal_df <- pca_arr[421:494,]
+response_df <- pca_arr[1:58,]
+normal_df <- pca_arr[59:132,]
+erm <- calc_erm1(response_df, normal_df)
 
-erm <- calc_erm(response_df, normal_df)
+# Only consider PC1
+pca_arr <- plot_arr[,1]
+response_vec <- pca_arr[1:420]
+erm <- response_vec[-(1:210)] - response_vec[1:210]
 
 # YEOH --------------------------------------------------------------------
 # Trimmed-mean scaling
@@ -589,11 +625,12 @@ ggsave("dump/vectors-mnn_d0d8_pca_basis_top3.pdf", vectors_plot,
 ### Extracting truth labels and training/test
 labels_yeoh <- yeoh_metadata[names(erm), c(6, 8, 12)]
 results_df <- cbind(erm, labels_yeoh)
-head(results_df)
+
 # Change truth labels with value 2 to 1
 results_df[results_df$event_code == 2, 4] <- 1
+results_df[order(results_df$erm),]
 
-write.table(results_df, "dump/results-mnn_d0d8_pca_basis_top3.tsv",
+write.table(results_df, "dump/results-quantile_d0d8_pca_basis_top3_batch9.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 write.table(results_df, "dump/remove_centroid/results-gfs.tsv",
@@ -614,11 +651,11 @@ save_fig(results_roc, ROC_WPATH,
          width = 9, height = 9)
 
 # RETROSPECTIVE -----------------------------------------------------------
-results_1 <- read.table("dump/results-mnn_d0d8_pca_basis_top3.tsv",
+results_1 <- read.table("dump/results-quantile_d0d8_pca_basis_top3_batch9.tsv",
                         sep = "\t", header = T, row.names = 1)
-results_2 <- read.table("dump/results-qnorm_d0d8_pca_basis_top3.tsv",
+results_2 <- read.table("dump/results-quantile_d0d8_pca_basis_top3_calc2.tsv",
                         sep = "\t", header = T, row.names = 1)
-results_3 <- read.table("dump/results-gfs_ttest_d0d8_pca_basis_top3.tsv",
+results_3 <- read.table("dump/results-quantile_d0d8_pca_basis_top3_calc3.tsv",
                         sep = "\t", header = T, row.names = 1)
 
 labels_vec <- results_1[order(rownames(results_1)), 4]
@@ -627,10 +664,10 @@ results2_vec <- results_2[order(rownames(results_2)), 1]
 results3_vec <- results_3[order(rownames(results_3)), 1]
 
 par(mar = rep(5,4))
-plot_roc(list(results1_vec, results2_vec, results3_vec), labels_vec,
-         name_vec = c("MNN", "Quantile", "GFS"))
+plot_roc(list(results1_vec), labels_vec,
+         name_vec = c("Batch 9"))
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/results-comparison.pdf",
+save_fig(results_roc, "dump/results-batch9.pdf",
          width = 9, height = 9)
 
 # yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",

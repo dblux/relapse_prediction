@@ -96,6 +96,15 @@ norm_gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
   return (as.data.frame(ranked_A))
 }
 
+norm_cdf <- function(df) {
+  for (c in 1:ncol(df)) {
+    notzero <- df[,c] != 0
+    df[,c][notzero] <- rank(df[,c][notzero])
+    df[,c] <- df[,c]/sum(notzero)
+  }
+  return(df)
+}
+
 # Function that calculates the matrix of mean differences from the patient and control matrix
 # Arguments: a <- larger matrix, b <- smaller matrix
 # CLT: As n -> infinity, approximates more accurately a normal distribution.
