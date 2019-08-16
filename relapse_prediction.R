@@ -1,12 +1,15 @@
 # library(Rtsne)
+# library(dendextend)
+# library(rgl)
 # library(scran)
 library(ggplot2)
 library(cowplot)
-# library(dendextend)
-library(rgl)
 library(reshape2)
 library(RColorBrewer)
 source("../functions.R")
+
+# theme_set(theme_dark())
+theme_set(theme_cowplot())
 # FUNCTIONS ---------------------------------------------------------------
 # Filter probes with too many zeros
 filter_probesets <- function(df, percent_threshold) {
@@ -217,68 +220,55 @@ mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
 mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
                             sep = "\t", header = T, row.names = 1)
 
-yeoh_mean <- plot_mean(yeoh_data,
-                       yeoh_metadata$batch,
-                       yeoh_metadata$time_point)
-ggsave("dump/trimmed_mean.pdf", yeoh_mean_plot,
-       width = 9, height = 9)
-
-mile_mean <- plot_mean(mile_data,
-                       substring(mile_metadata$subtype, 17))
-ggsave("dump/trimmed_mean-mile.pdf", mile_mean,
-       width = 9, height = 9)
-
-logfc <- calc_logfc(yeoh_data[,1:210], yeoh_data[,-(1:210)])
-
-yeoh_metadata[yeoh_metadata$batch == 9,]
-
 # DIFENG ------------------------------------------------------------------
-colnames(yeoh_data)
-chosen_pid <- rownames(yeoh_metadata)[yeoh_metadata$batch == 9]
-batch_yeoh <- yeoh_data[,chosen_pid]
-batch_yeoh <- cbind(batch_yeoh[,c(endsWith(colnames(batch_yeoh), "D0"))],
-                    batch_yeoh[,c(endsWith(colnames(batch_yeoh), "D8"))])
-
 # Trimmed-mean scaling
-scaled_yeoh <- norm_mean_scaling(batch_yeoh)
+scaled_yeoh <- norm_mean_scaling(yeoh_data)
 scaled_mile <- norm_mean_scaling(mile_data)
 # Pre-processing of yeoh_data
 selected_probes <- filter_probesets(scaled_yeoh, 0.2)
 filtered_yeoh <- scaled_yeoh[selected_probes,]
 # MILE data
 filtered_mile <- scaled_mile[selected_probes,]
-# # Quantile normalise before log transform to calculate logfc
-# qnorm_data <- norm_quantile(cbind(filtered_yeoh, filtered_mile))
+colnames(filtered_mile[,751:824])
+
+# # Quantile normalise whole dataset together
+# qnorm_data <- norm_quantile(cbind(filtered_yeoh, filtered_mile[,751:824]))
 # qnorm_yeoh <- qnorm_data[1:ncol(filtered_yeoh)]
 # qnorm_mile <- qnorm_data[-(1:ncol(filtered_yeoh))]
 
 # Quantile normalise by time point
 colnames(filtered_mile[,751:824])
-colnames(filtered_yeoh[,1:29])
+colnames(filtered_yeoh[,1:210])
 colnames(filtered_yeoh[,30:58])
 
-qnorm_d0 <- norm_quantile(filtered_yeoh[,1:29])
-qnorm_d8 <- norm_quantile(filtered_yeoh[,-(1:29)])
+qnorm_d0_leukemia <- norm_quantile(cbind(filtered_yeoh[,1:210], filtered_mile[,1:750]))
+qnorm_d0 <- qnorm_d0_leukemia[,1:210]
+qnorm_leukemia <- qnorm_d0_leukemia[,-(1:210)]
+qnorm_d8 <- norm_quantile(filtered_yeoh[,-(1:210)])
 qnorm_normal <- norm_quantile(filtered_mile[,751:824])
+colnames(qnorm_leukemia)
 
 # Selecting drug responsive genes between D0 and D8
-ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_d8), 29, is_paired = T)
+ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_d8), 210, is_paired = T)
 log_fc <- calc_logfc(qnorm_d0, qnorm_d8)
 pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
 fc_probesets <- names(log_fc)[log_fc > 1]
 intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
 print(length(intersect_probesets))
 
-# # Selecting drug responsive genes between D0 and normal
-# ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_normal), 210, is_paired = F)
-# log_fc <- calc_logfc(qnorm_d0, qnorm_normal)
-# fc_probesets <- names(log_fc)[log_fc > 2]
-# intersect_probesets <- names(sort(ttest_pvalue[fc_probesets])[1:500])
+# # Selecting drug responsive genes between D0 and D8 (Quantile: ALL)
+# ttest_pvalue <- calc_ttest(qnorm_yeoh, 210, is_paired = T)
+# log_fc <- calc_logfc(qnorm_yeoh[,1:210], qnorm_yeoh[,-(1:210)])
+# pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+# fc_probesets <- names(log_fc)[log_fc > 1]
+# intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
 # print(length(intersect_probesets))
 
 log_d0 <- log2_transform(qnorm_d0[intersect_probesets,])
 log_d8 <- log2_transform(qnorm_d8[intersect_probesets,])
 log_normal <- log2_transform(qnorm_normal[intersect_probesets,])
+log_leukemia <- log2_transform(qnorm_leukemia[intersect_probesets,])
+dim(log_leukemia)
 
 # PCA basis: D0 and normal
 transposed_df <- t(cbind(log_d0, log_normal))
@@ -286,22 +276,25 @@ pca_obj <- prcomp(transposed_df, center = T, scale. = T)
 pca_basis <- pca_obj$x[,1:4]
 
 # Projection of D8 data
-add_data <- t(log_d8)
+add_data <- t(cbind(log_d8, log_leukemia))
 pca_add <- predict(pca_obj, add_data)[,1:4]
-plot_arr <- rbind(pca_basis[1:29,],
-                  pca_add,
-                  pca_basis[-(1:29),])
+plot_arr <- rbind(pca_add[-(1:210),],
+                  pca_basis[1:210,],
+                  pca_add[1:210,],
+                  pca_basis[-(1:210),])
 
 # PCA: Eigenvalues
 eig_value <- (pca_obj$sdev)^2
 var_pc <- eig_value[1:5]/sum(eig_value)
 pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
 
+# Calculating ERM results
 pca_arr <- plot_arr[,1:3]
 colnames(pca_arr)
 dim(pca_arr)
-response_df <- pca_arr[1:58,]
-normal_df <- pca_arr[59:132,]
+response_df <- pca_arr[751:1170,]
+normal_df <- pca_arr[1171:1244,]
+rownames(normal_df)
 erm <- calc_erm1(response_df, normal_df)
 
 # Only consider PC1
@@ -539,51 +532,53 @@ save_fig(dendogram, "dump/hclust-mnn_yeoh.pdf",
 # mile_palette <- c(red_palette, "darkolivegreen3")
 # colour_code <- rep(mile_palette, num_subtype)
 
-# Batch information of yeoh is encoded
-batch_info <- yeoh_metadata[rownames(response_df),6]
-blue_palette <- brewer.pal(9, "Blues")
-batch_colour <- c(blue_palette[batch_info],
-                  "tomato3", "darkolivegreen3")
-# Colour information
-all_colour <- c(rep(c("steelblue4", "turquoise3"), c(210, 210)),
-                rep("tomato3", 750), rep("darkolivegreen3", 74))
-# Colour information
-centroid_colour <- c(rep(c("steelblue4", "turquoise3"), c(210, 210)),
-                     rep("tomato3", 1), rep("darkolivegreen3", 1))
+# # Batch information of yeoh is encoded
+# batch_info <- yeoh_metadata[rownames(response_df),6]
+# blue_palette <- brewer.pal(9, "Blues")
+# batch_colour <- c(blue_palette[batch_info],
+#                   "tomato3", "darkolivegreen3")
+# # Colour information
+# all_colour <- c(rep(c("steelblue4", "turquoise3"), c(210, 210)),
+#                 rep("tomato3", 750), rep("darkolivegreen3", 74))
+
+# Subtype colours
+num_subtype <- table(substring(rownames(plot_arr)[1:750], 1, 1))
+red_palette <- brewer.pal(9, "Reds")[2:9]
+subtype_colour <- rep(red_palette, num_subtype)
 
 # Batch information of yeoh is encoded
-names_index <- rownames(plot_arr)[1:210]
-head(names_index)
+names_index <- rownames(plot_arr)[751:(751+209)]
 batch_info <- yeoh_metadata[names_index,6]
-batch_palette <- brewer.pal(9, "Blues")
-batch_colour <- c(batch_palette[batch_info],
-                  batch_palette[batch_info],
+blue_palette <- brewer.pal(9, "Blues")
+batch_colour <- c(subtype_colour,
+                  rep(blue_palette[batch_info], 2),
                   rep("darkolivegreen3", 74))
-batch_shape <- c(rep(17, 210),
+batch_shape <- c(rep(15, 750),
+                 rep(17, 210),
                  rep(19, 210+74))
 
 plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
                     batch_shape, pc_labels)
 plot_pca
 dev.new()
-ggsave("dump/pca_basis-mnn_d0d8.pdf", plot_pca,
+ggsave("dump/pca_basis-quantile_d0leukemia_d8_normal.pdf", plot_pca,
        width = 9, height = 9)
 
-# # Dataframe to be visualised
-# visualise_arr <- rbind(response_df,
-#                        apply(leukemia_df, 2, median),
-#                        apply(normal_df, 2, median))
-
 # Visualising vectors
-arrows_df <- cbind(response_df[1:210,], response_df[-(1:210),])
-colnames(arrows_df)
-colnames(arrows_df) <- paste(colnames(arrows_df),
-                             rep(LETTERS[1:2], each = 3),
-                             sep = "_")
-centroid_df <- rbind(apply(response_df[1:210,], 2, median),
-                     apply(response_df[-(1:210),], 2, median),
-                     apply(leukemia_df, 2, median),
-                     apply(normal_df, 2, median))
+labels <- yeoh_metadata[rownames(response_df)[1:210], "event_code"]
+labels[labels == 2] <- 1
+
+arrows_arr <- cbind(response_df[1:210,], response_df[-(1:210),], matrix(labels))
+colnames(arrows_arr) <- c(paste(colnames(arrows_arr)[1:6],
+                                rep(LETTERS[1:2], each = 3),
+                                sep = "_"),
+                          "labels")
+
+centroid_arr <- rbind(apply(response_df[1:210,], 2, median),
+                      apply(response_df[-(1:210),], 2, median),
+                      apply(plot_arr[1:750, 1:3], 2, median),
+                      apply(normal_df, 2, median))
+
 plot_vectors <- function(df, centroid_df, pc_labels) {
   pca_1 <- ggplot(data = df) +
     geom_point(aes(x = PC1_A, y = PC2_A), size = 3,
@@ -592,10 +587,9 @@ plot_vectors <- function(df, centroid_df, pc_labels) {
                col = "turquoise3", show.legend = F) +
     geom_point(data = centroid_df, aes(x = PC1, y = PC2),
                size = 5, shape = 17, colour = c("purple4", "violet", "tomato3", "darkolivegreen3")) +
-    geom_segment(aes(x = PC1_A, y = PC2_A,
-                     xend = PC1_B, yend = PC2_B),
-                 arrow = arrow(length = unit(0.3, "cm")),
-                 alpha = 0.5) +
+    geom_segment(aes(x = PC1_A, y = PC2_A, xend = PC1_B, yend = PC2_B, colour = as.factor(labels)),
+                 arrow = arrow(length = unit(0.3, "cm")), alpha = 0.8, show.legend = F) +
+    scale_color_manual(values = c("black",  "red")) +
     xlab(pc_labels[1]) + ylab(pc_labels[2])
   pca_2 <- ggplot(data = df) +
     geom_point(aes(x = PC2_A, y = PC3_A), size = 3,
@@ -604,21 +598,19 @@ plot_vectors <- function(df, centroid_df, pc_labels) {
                col = "turquoise3", show.legend = F) +
     geom_point(data = centroid_df, aes(x = PC2, y = PC3),
                size = 5, shape = 17, colour = c("purple4", "violet", "tomato3", "darkolivegreen3")) +
-    geom_segment(aes(x = PC2_A, y = PC3_A,
-                     xend = PC2_B, yend = PC3_B),
-                 arrow = arrow(length = unit(0.3, "cm")),
-                 alpha = 0.5) +
+    geom_segment(aes(x = PC2_A, y = PC3_A, xend = PC2_B, yend = PC3_B, colour = as.factor(labels)),
+                 arrow = arrow(length = unit(0.3, "cm")), alpha = 0.8, show.legend = F) +
+    scale_color_manual(values = c("black",  "red")) +
     xlab(pc_labels[2]) + ylab(pc_labels[3])
   multiplot <- plot_grid(pca_1, pca_2, ncol = 2)
   return(multiplot)
 }
 
-vectors_plot <- plot_vectors(as.data.frame(arrows_df),
-                             as.data.frame(centroid_df),
+vectors_plot <- plot_vectors(as.data.frame(arrows_arr),
+                             as.data.frame(centroid_arr),
                              pc_labels)
 vectors_plot
-
-ggsave("dump/vectors-mnn_d0d8_pca_basis_top3.pdf", vectors_plot,
+ggsave("dump/vectors-quantile_d0leukemia_d8_normal.pdf", vectors_plot,
        width = 12, height = 6)
 
 # RESULTS -----------------------------------------------------------------
@@ -630,7 +622,9 @@ results_df <- cbind(erm, labels_yeoh)
 results_df[results_df$event_code == 2, 4] <- 1
 results_df[order(results_df$erm),]
 
-write.table(results_df, "dump/results-quantile_d0d8_pca_basis_top3_batch9.tsv",
+table(results_df$event_code)
+
+write.table(results_df, "dump/results-quantile_d0leukemia_d8_normal.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 write.table(results_df, "dump/remove_centroid/results-gfs.tsv",
@@ -663,11 +657,15 @@ results1_vec <- results_1[order(rownames(results_1)), 1]
 results2_vec <- results_2[order(rownames(results_2)), 1]
 results3_vec <- results_3[order(rownames(results_3)), 1]
 
+# Visualise results now
+labels_vec <- results_df[order(rownames(results_df)), 4]
+results_vec <- results_df[order(rownames(results_df)), 1]
+
 par(mar = rep(5,4))
-plot_roc(list(results1_vec), labels_vec,
-         name_vec = c("Batch 9"))
+plot_roc(list(results_vec), labels_vec,
+         name_vec = c("Quantile normalisation"))
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/results-batch9.pdf",
+save_fig(results_roc, "dump/roc-quantile_d0leuk_d8_normal.pdf",
          width = 9, height = 9)
 
 # yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
