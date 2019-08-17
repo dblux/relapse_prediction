@@ -8,8 +8,8 @@ library(reshape2)
 library(RColorBrewer)
 source("../functions.R")
 
-# theme_set(theme_dark())
-theme_set(theme_cowplot())
+theme_set(theme_dark())
+# theme_set(theme_cowplot())
 # FUNCTIONS ---------------------------------------------------------------
 # Filter probes with too many zeros
 filter_probesets <- function(df, percent_threshold) {
@@ -193,16 +193,16 @@ plot_pca <- function(df, metadata) {
 # Arguments: PCA-transformed df
 pca_all <- function(df, colour_code, shape_vec, pc_labels) {
   pc1_pc2 <- ggplot(df, aes(x = PC1, y = PC2)) +
-    geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_code, colour = "black", shape = shape_vec, show.legend = F) +
     xlab(pc_labels[1]) + ylab(pc_labels[2])
   pc2_pc3 <- ggplot(df, aes(x = PC2, y = PC3)) +
-    geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_code, colour = "black", shape = shape_vec, show.legend = F) +
     xlab(pc_labels[2]) + ylab(pc_labels[3])
   pc1_pc3 <- ggplot(df, aes(x = PC1, y = PC3)) +
-    geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_code, colour = "black", shape = shape_vec, show.legend = F) +
     xlab(pc_labels[1]) + ylab(pc_labels[3])
   pc3_pc4 <- ggplot(df, aes(x = PC3, y = PC4)) +
-    geom_point(size = 2, col = colour_code, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_code, colour = "black", shape = shape_vec, show.legend = F) +
     xlab(pc_labels[3]) + ylab(pc_labels[4])
   multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3, pc3_pc4,
                          ncol = 2, nrow = 2)
@@ -219,7 +219,6 @@ mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
                         sep = "\t", header = T, row.names = 1)
 mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
                             sep = "\t", header = T, row.names = 1)
-
 # DIFENG ------------------------------------------------------------------
 # Trimmed-mean scaling
 scaled_yeoh <- norm_mean_scaling(yeoh_data)
@@ -256,6 +255,16 @@ fc_probesets <- names(log_fc)[log_fc > 1]
 intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
 print(length(intersect_probesets))
 
+# Selecting genes based on subtypes in MILE data
+leukemia_subtype <- substring(colnames(qnorm_leukemia),1,1)
+union_probesets <- character()
+for (subtype in LETTERS[1:8]){
+  print(subtype)
+  logfc <- calc_logfc(qnorm_normal, qnorm_leukemia[,leukemia_subtype == subtype])
+  probesets <- rownames(qnorm_normal)[logfc > 2]
+  union_probesets <- union(union_probesets, probesets)
+}
+
 # # Selecting drug responsive genes between D0 and D8 (Quantile: ALL)
 # ttest_pvalue <- calc_ttest(qnorm_yeoh, 210, is_paired = T)
 # log_fc <- calc_logfc(qnorm_yeoh[,1:210], qnorm_yeoh[,-(1:210)])
@@ -269,6 +278,12 @@ log_d8 <- log2_transform(qnorm_d8[intersect_probesets,])
 log_normal <- log2_transform(qnorm_normal[intersect_probesets,])
 log_leukemia <- log2_transform(qnorm_leukemia[intersect_probesets,])
 dim(log_leukemia)
+
+# log_d0 <- log2_transform(qnorm_d0[union_probesets,])
+# log_d8 <- log2_transform(qnorm_d8[union_probesets,])
+# log_normal <- log2_transform(qnorm_normal[union_probesets,])
+# log_leukemia <- log2_transform(qnorm_leukemia[union_probesets,])
+# dim(log_leukemia)
 
 # PCA basis: D0 and normal
 transposed_df <- t(cbind(log_d0, log_normal))
@@ -553,15 +568,15 @@ blue_palette <- brewer.pal(9, "Blues")
 batch_colour <- c(subtype_colour,
                   rep(blue_palette[batch_info], 2),
                   rep("darkolivegreen3", 74))
-batch_shape <- c(rep(15, 750),
-                 rep(17, 210),
-                 rep(19, 210+74))
+batch_shape <- c(rep(22, 750),
+                 rep(21, 210),
+                 rep(24, 210),
+                 rep(23, 74))
 
 plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
                     batch_shape, pc_labels)
 plot_pca
-dev.new()
-ggsave("dump/pca_basis-quantile_d0leukemia_d8_normal.pdf", plot_pca,
+ggsave("dump/pca-quantile_d0leuk_d8_normal.pdf", plot_pca,
        width = 9, height = 9)
 
 # Visualising vectors
@@ -610,7 +625,7 @@ vectors_plot <- plot_vectors(as.data.frame(arrows_arr),
                              as.data.frame(centroid_arr),
                              pc_labels)
 vectors_plot
-ggsave("dump/vectors-quantile_d0leukemia_d8_normal.pdf", vectors_plot,
+ggsave("dump/vectors-quantile_union_subtype.pdf", vectors_plot,
        width = 12, height = 6)
 
 # RESULTS -----------------------------------------------------------------
@@ -622,12 +637,7 @@ results_df <- cbind(erm, labels_yeoh)
 results_df[results_df$event_code == 2, 4] <- 1
 results_df[order(results_df$erm),]
 
-table(results_df$event_code)
-
-write.table(results_df, "dump/results-quantile_d0leukemia_d8_normal.tsv",
-            quote = F, sep = "\t", row.names = T, col.names = T)
-
-write.table(results_df, "dump/remove_centroid/results-gfs.tsv",
+write.table(results_df, "dump/results-quantile_union_subtype.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 # Investigate
@@ -665,7 +675,7 @@ par(mar = rep(5,4))
 plot_roc(list(results_vec), labels_vec,
          name_vec = c("Quantile normalisation"))
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/roc-quantile_d0leuk_d8_normal.pdf",
+save_fig(results_roc, "dump/roc-quantile_union_subtype.pdf",
          width = 9, height = 9)
 
 # yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
