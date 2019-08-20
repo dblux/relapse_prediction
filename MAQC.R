@@ -5,9 +5,6 @@ library(scran)
 library(sva)
 source("../functions.R")
 
-raw_maqc <- read.table("../diff_expr/data/MAQC-I/processed/mas5_original-ref.tsv",
-                       sep = "\t", header = T, row.names = 1)
-
 # Assumes that dataframe has been log-transformed
 plot_batch <- function(df, batch_info, shape_info) {
   batch_factor <- factor(batch_info)
@@ -62,9 +59,15 @@ plot_pca <- function(df, batch_info) {
                show.legend = F)
   return(pc1_pc2)
 }
-# Visualise ---------------------------------------------------------------
+# IMPORT DATA -------------------------------------------------------------
+raw_maqc <- read.table("../diff_expr/data/MAQC-I/processed/mas5_original-ref.tsv",
+                       sep = "\t", header = T, row.names = 1)
+colnames(raw_maqc)
 batch_info <- rep(1:6, each = 10)
 shape_info <- rep(rep(1:2, each = 5), 6)
+
+# Visualise ---------------------------------------------------------------
+# No normalisation
 plot_before <- plot_batch(raw_maqc, batch_info, shape_info)
 plot_before
 ggsave("dump/plot_before.pdf", plot_before,
@@ -78,7 +81,7 @@ ggsave("dump/plot_scaled.pdf", plot_scaled,
        width = 6, height = 6)
 
 # CDF
-rank_maqc <- norm_cdf(raw_maqc)
+rank_maqc <- norm.cdf(raw_maqc)
 plot_batch(rank_maqc, batch_info, shape_info)
 
 # GFS
@@ -115,4 +118,27 @@ batch_qnorm <- rep(rep(1:6, each = 5), 2)
 shape_qnorm <- rep(1:2, each = 30)
 plot_qnorm <- plot_batch(qnorm_maqc, batch_qnorm, shape_qnorm)
 ggsave("dump/plot_qnorm.pdf", plot_qnorm,
+       width = 6, height = 6)
+
+# Harman
+
+# ComBat ------------------------------------------------------------------
+# Creation of pData dataframe (metadata)
+class <- as.factor(substring(colnames(raw_maqc), 7, 7))
+batch <- as.factor(substring(colnames(raw_maqc), 5, 5))
+maqc_metadata <- data.frame(shape_info, batch_info)
+# Rownames of metadata are same as colnames of data df
+rownames(maqc_metadata) <- colnames(raw_maqc)
+
+# ComBat assumes that data has been normalised and probesets have been filtered
+# Error if probesets are not filtered as rows have 0 variance
+scaled_maqc <- norm.mean_scaling(raw_maqc)
+selected_probetsets <- filter_probesets(scaled_maqc, 0.2)
+filtered_maqc <- scaled_maqc[selected_probetsets,]
+
+model_combat <- model.matrix(~1, data = maqc_metadata)
+combat_maqc <- ComBat(data.matrix(filtered_maqc), maqc_metadata$batch_info, model_combat)
+
+plot_combat <- plot_batch(data.frame(combat_maqc), batch_info, shape_info)
+ggsave("dump/plot_combat.pdf", plot_combat,
        width = 6, height = 6)

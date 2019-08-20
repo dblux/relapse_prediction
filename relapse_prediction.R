@@ -219,7 +219,107 @@ mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
                         sep = "\t", header = T, row.names = 1)
 mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
                             sep = "\t", header = T, row.names = 1)
-# DIFENG ------------------------------------------------------------------
+
+yeoh_2002 <- read.table("data/yeoh_2002/processed/mas5_original.tsv",
+                        sep = "\t", header = T, row.names = 1)
+
+# QUANTILE (NEW) ---------------------------------------------------------------
+# Trimmed-mean scaling
+scaled_yeoh <- norm_mean_scaling(yeoh_data)
+scaled_leuk <- norm_mean_scaling(yeoh_2002)
+# Pre-processing of yeoh_data
+selected_probes <- filter_probesets(scaled_yeoh, 0.2)
+filtered_yeoh <- scaled_yeoh[selected_probes,]
+# Yeoh 2002 data
+filtered_leuk <- scaled_leuk[selected_probes,]
+
+# # Quantile normalise whole dataset together
+# qnorm_data <- norm_quantile(cbind(filtered_yeoh, filtered_mile[,751:824]))
+# qnorm_yeoh <- qnorm_data[1:ncol(filtered_yeoh)]
+# qnorm_mile <- qnorm_data[-(1:ncol(filtered_yeoh))]
+
+# Quantile normalise by time point
+colnames(filtered_leuk)
+colnames(filtered_yeoh)
+
+qnorm_d0_leukemia <- norm_quantile(cbind(filtered_yeoh[,1:210], filtered_leuk[,-(1:19)]))
+qnorm_d0 <- qnorm_d0_leukemia[,1:210]
+qnorm_leukemia <- qnorm_d0_leukemia[,-(1:210)]
+qnorm_d8 <- norm_quantile(filtered_yeoh[,-(1:210)])
+qnorm_normal <- norm_quantile(filtered_mile[,751:824])
+colnames(qnorm_leukemia)
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_d8), 210, is_paired = T)
+log_fc <- calc_logfc(qnorm_d0, qnorm_d8)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+# Selecting genes based on subtypes in MILE data
+leukemia_subtype <- substring(colnames(qnorm_leukemia),1,1)
+union_probesets <- character()
+for (subtype in LETTERS[1:8]){
+  print(subtype)
+  logfc <- calc_logfc(qnorm_normal, qnorm_leukemia[,leukemia_subtype == subtype])
+  probesets <- rownames(qnorm_normal)[logfc > 2]
+  union_probesets <- union(union_probesets, probesets)
+}
+
+# # Selecting drug responsive genes between D0 and D8 (Quantile: ALL)
+# ttest_pvalue <- calc_ttest(qnorm_yeoh, 210, is_paired = T)
+# log_fc <- calc_logfc(qnorm_yeoh[,1:210], qnorm_yeoh[,-(1:210)])
+# pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+# fc_probesets <- names(log_fc)[log_fc > 1]
+# intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+# print(length(intersect_probesets))
+
+log_d0 <- log2_transform(qnorm_d0[intersect_probesets,])
+log_d8 <- log2_transform(qnorm_d8[intersect_probesets,])
+log_normal <- log2_transform(qnorm_normal[intersect_probesets,])
+log_leukemia <- log2_transform(qnorm_leukemia[intersect_probesets,])
+dim(log_leukemia)
+
+# log_d0 <- log2_transform(qnorm_d0[union_probesets,])
+# log_d8 <- log2_transform(qnorm_d8[union_probesets,])
+# log_normal <- log2_transform(qnorm_normal[union_probesets,])
+# log_leukemia <- log2_transform(qnorm_leukemia[union_probesets,])
+# dim(log_leukemia)
+
+# PCA basis: D0 and normal
+transposed_df <- t(cbind(log_d0, log_normal))
+pca_obj <- prcomp(transposed_df, center = T, scale. = T)
+pca_basis <- pca_obj$x[,1:4]
+
+# Projection of D8 data
+add_data <- t(cbind(log_d8, log_leukemia))
+pca_add <- predict(pca_obj, add_data)[,1:4]
+plot_arr <- rbind(pca_add[-(1:210),],
+                  pca_basis[1:210,],
+                  pca_add[1:210,],
+                  pca_basis[-(1:210),])
+
+# PCA: Eigenvalues
+eig_value <- (pca_obj$sdev)^2
+var_pc <- eig_value[1:5]/sum(eig_value)
+pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+
+# Calculating ERM results
+pca_arr <- plot_arr[,1:3]
+colnames(pca_arr)
+dim(pca_arr)
+response_df <- pca_arr[751:1170,]
+normal_df <- pca_arr[1171:1244,]
+rownames(normal_df)
+erm <- calc_erm1(response_df, normal_df)
+
+# Only consider PC1
+pca_arr <- plot_arr[,1]
+response_vec <- pca_arr[1:420]
+erm <- response_vec[-(1:210)] - response_vec[1:210]
+
+# QUANTILE ---------------------------------------------------------------
 # Trimmed-mean scaling
 scaled_yeoh <- norm_mean_scaling(yeoh_data)
 scaled_mile <- norm_mean_scaling(mile_data)
