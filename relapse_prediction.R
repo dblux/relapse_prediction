@@ -1,7 +1,7 @@
 # library(Rtsne)
 # library(dendextend)
-# library(rgl)
 # library(scran)
+library(rgl)
 library(ggplot2)
 library(cowplot)
 library(reshape2)
@@ -222,6 +222,8 @@ mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
 
 yeoh_2002 <- read.table("data/yeoh_2002/processed/mas5_original.tsv",
                         sep = "\t", header = T, row.names = 1)
+
+nrow(yeoh_data)
 
 # QUANTILE (NEW) ---------------------------------------------------------------
 # Trimmed-mean scaling
@@ -785,3 +787,38 @@ save_fig(results_roc, "dump/roc-quantile_union_subtype.pdf",
 #   print(results_list[[i]])
 #   print(results_list2[[i]])
 # }
+
+
+# MILE: Normal samples ----------------------------------------------------
+# PCA
+plot.pca_batch <- function(untransformed_df, colour_vec, shape_vec = 19) {
+  pca_obj <- prcomp(t(untransformed_df))
+  df <- data.frame(pca_obj$x[,1:5])
+  eig_value <- (pca_obj$sdev)^2
+  var_pc <- eig_value[1:5]/sum(eig_value)
+  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+  # Scatter plots
+  pc1_pc2 <- ggplot(df, aes(x = PC1, y = PC2)) +
+    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    xlab(pc_labels[1]) + ylab(pc_labels[2])
+  pc2_pc3 <- ggplot(df, aes(x = PC2, y = PC3)) +
+    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    xlab(pc_labels[2]) + ylab(pc_labels[3])
+  pc1_pc3 <- ggplot(df, aes(x = PC1, y = PC3)) +
+    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    xlab(pc_labels[1]) + ylab(pc_labels[3])
+  pc3_pc4 <- ggplot(df, aes(x = PC3, y = PC4)) +
+    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    xlab(pc_labels[3]) + ylab(pc_labels[4])
+  multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3, pc3_pc4,
+                         ncol = 2, nrow = 2)
+  return(multiplot)
+}
+
+normal_mile <- mile_data[,751: 824]
+scaled_mile <- norm.mean_scaling(normal_mile)
+leuk_yeoh <- yeoh_data[,1:210]
+
+colour_info <- rep(c("black", "red"), c(74, 210))
+plot.pca_batch(cbind(normal_mile, leuk_yeoh), colour_info)
+plot.pca_3d(cbind(normal_mile, leuk_yeoh), colour_info)

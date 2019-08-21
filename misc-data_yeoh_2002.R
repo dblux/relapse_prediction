@@ -122,6 +122,7 @@ pca_plot <- function(untransformed_df, colour_vec, shape_vec = 19) {
                          ncol = 2, nrow = 2)
   return(multiplot)
 }
+
 subtype_shape <- as.numeric(as.factor(subtype_colour)) - 1
 pca_yeoh <- pca_plot(filtered_df, date_colour, subtype_shape)
 ggsave("dump/pca-yeoh_2002_scaled.pdf", pca_yeoh,

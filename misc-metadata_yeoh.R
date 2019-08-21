@@ -105,3 +105,62 @@ write.table(yeoh_metadata1, "data/GSE67684/processed/metadata_batch.tsv",
             quote = F, sep = "\t", row.names = F)
 
 table(yeoh_metadata1$batch)
+
+# My assignment of batches
+yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
+                            sep = "\t", header = T, row.names = 1)
+colnames(yeoh_metadata)
+
+ans_metadata <- read.table("data/leuk_D33/README/batch.info.txt",
+                            sep = "\t", header = T, row.names = 1)
+old_pid <- as.character(ans_metadata$ID_GEO)
+patient_num <- as.numeric(sapply(strsplit(old_pid, "_"), `[[`, 1))
+time_point <- sapply(strsplit(old_pid, "_"), `[[`, 2)
+pid <- sprintf("P%03d_%s", patient_num, time_point)
+# Subsets based on order in ans_metadata
+compare <- cbind(yeoh_metadata[pid,"batch"], ans_metadata$Batch_No)
+head(yeoh_metadata)
+
+subset_metadata <- yeoh_metadata[,c(1,4,7)]
+head(subset_metadata)
+
+# Add D33 samples
+d33_dates <- read.table("data/leuk_D33/processed/scan_dates.tsv",
+                        sep = "\t", header = F, row.names = 1)
+
+scan_date <- as.character(as.Date(strptime(d33_dates[,1], format = "%Y-%m-%d")))
+d33_metadata <- data.frame(geo_accession = NA, scan_date, platform = "GPL570")
+patient_num <- as.numeric(sapply(strsplit(substring_head(rownames(d33_dates), 4), "_"), `[[`, 1))
+d33_pid <- sprintf("P%03d_D33", patient_num)
+rownames(d33_metadata) <- d33_pid
+d33_metadata
+
+# Add normal samples
+normal_dates <- read.table("data/leuk_normal/processed/scan_dates.tsv",
+                           sep = "\t", header = F, row.names = 1)
+scan_date <- as.character(as.Date(strptime(normal_dates[,1], format = "%m/%d/%y")))
+normal_metadata <- data.frame(geo_accession = NA, scan_date, platform = "GPL570")
+rownames(normal_metadata) <- sprintf("N%02d", 1:4)
+
+# Combine all samples
+combined_metadata <- rbind(subset_metadata, d33_metadata, normal_metadata)
+View(combined_metadata)
+
+# Obtain batch information
+rownames(ans_metadata) <- ans_metadata[,1]
+batch_info <- ans_metadata[rownames(combined_metadata)[1:479], 2]
+batch_metadata <- cbind(combined_metadata, batch = c(batch_info, rep(2, 4)))
+
+write.table(batch_metadata, "data/GSE67684/processed/metadata_combined-batch.tsv",
+            quote = F, sep = "\t")
+
+# Appending training set information and labels to MRD info
+mrd_df <- read.table("data/GSE67684/README/labels_MRD.tsv",
+                     sep = "\t", header = T, comment.char = "")
+rownames(mrd_df) <- sprintf("P%03d", mrd_df$geo_patient_.)
+training_test <- yeoh_metadata[paste0(rownames(mrd_df), "_D0"), "training_test"]
+colnames(mrd_df)
+patient_metadata <- cbind(mrd_df[,3:6], label = mrd_df$event_code, training_test)
+patient_metadata$label[patient_metadata$label == 2] <- 1
+write.table(patient_metadata, "data/GSE67684/processed/metadata_combined-label.tsv",
+            quote = F, sep = "\t")
