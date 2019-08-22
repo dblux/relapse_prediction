@@ -18,13 +18,13 @@ filter_probesets <- function(df, percent_threshold) {
   return(selected_rows)
 }
 
-plot_mean <- function(df, batch_vec1, batch_vec2) {
+plot_mean <- function(df, batch_vec1) {
   # Melt dataframe
   melt_df <- melt(df, variable.name = "ID")
   print(head(melt_df))
   # Trimmed mean probe intensities for each chip
   mean_tibble <- melt_df %>% group_by(ID) %>%
-    summarise(mean = mean(value, trim_percentage = 0.02))
+    summarise(mean = mean(value))
   mean_batch_tibble <- cbind(mean_tibble,
                              batch_vec1 = batch_vec1[mean_tibble$ID])
   
@@ -210,20 +210,176 @@ pca_all <- function(df, colour_code, shape_vec, pc_labels) {
 }
 
 # IMPORT DATA -------------------------------------------------------------
-yeoh_data <- read.table("data/GSE67684/processed/mas5_ordered.tsv",
+yeoh_d0d8 <- read.table("data/GSE67684/processed/mas5_ordered.tsv",
                         sep = "\t", header = T, row.names = 1)
-yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
-                            sep = "\t", header = T, row.names = 1)
+yeoh_d33 <- read.table("data/leuk_D33/processed/mas5_filtered.tsv",
+                       sep = "\t", header = T, row.names = 1)
+yeoh_normal <- read.table("data/leuk_normal/processed/mas5_filtered.tsv",
+                          sep = "\t", header = T, row.names = 1)
+# yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
+#                             sep = "\t", header = T, row.names = 1)
+yeoh_batch <- read.table("data/GSE67684/processed/metadata_combined-batch.tsv",
+                         sep = "\t", header = T, row.names = 1)
+yeoh_label <- read.table("data/GSE67684/processed/metadata_combined-label.tsv",
+                         sep = "\t", header = T, row.names = 1)
 
 mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
                         sep = "\t", header = T, row.names = 1)
 mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
                             sep = "\t", header = T, row.names = 1)
 
-yeoh_2002 <- read.table("data/yeoh_2002/processed/mas5_original.tsv",
-                        sep = "\t", header = T, row.names = 1)
+# VISUALISATION -----------------------------------------------------------
+yeoh_combined <- cbind(yeoh_d0d8, yeoh_d33, yeoh_normal)
+batch_info <- yeoh_batch[colnames(yeoh_combined), "batch"]
 
-nrow(yeoh_data)
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+shape_2d <- rep(21:24, c(210,210,59,4))
+
+# Plot un-normalised
+plot_pca2d <- plot.pca_batch(yeoh_combined, batch_colour, shape_2d)
+ggsave("dump/pca_2d-yeoh_unnorm.pdf", plot_pca2d,
+       width = 9, height = 9)
+
+# 3D PCA plot
+plot.pca_3d <- function(df, colour_code, shape_vec, ratio_list = list(1,1,1)) {
+  pca_obj <- prcomp(t(df))
+  pca_arr <- as.data.frame(pca_obj$x[,1:3])
+  eig_value <- (pca_obj$sdev)^2
+  var_pc <- eig_value[1:3]/sum(eig_value)
+  pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
+  # RGL plot parameters
+  rgl.open()
+  rgl.bg(color="white")
+  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
+  par3d(windowRect = c(50, 20, 500, 500))
+  # Plot of MILE dataset
+  with(pca_arr, pch3d(PC1, PC2, PC3, bg = colour_code,
+                       pch = shape_vec, cex = 0.5, lwd = 1.5))
+  box3d(col = "black")
+  title3d(xlab = pc_labels[1], ylab = pc_labels[2], zlab = pc_labels[3],
+          col = "black")
+  # Plot aspect ratios of axis according to variance
+  do.call(aspect3d, ratio_list)
+}
+
+shape_3d <- rep(c(16,15,17,18), c(210,210,59,4))
+plot.pca_3d(yeoh_combined, batch_colour, shape_2d, list(2,1,1))
+rgl.viewpoint(zoom = 0.8)
+
+# Save viewpoint parameters
+saved_matrix <- par3d()$userMatrix
+saved_zoom <- par3d()$zoom
+# Reload viewpoint parameters
+view3d(userMatrix = saved_matrix, zoom = saved_zoom)
+rgl.postscript("dump/pca_3d-yeoh_unnorm.pdf", "pdf")
+
+scaled_combined_yeoh <- norm.mean_scaling(yeoh_combined)
+plot_pca2d <- plot.pca_batch(scaled_combined_yeoh, batch_colour, shape_2d)
+plot_pca2d
+plot.pca_3d(scaled_combined_yeoh, batch_colour, shape_2d, list(2,1,1))
+rgl.postscript("dump/pca_3d-yeoh_scaled.pdf", "pdf")
+mean_plot <- plot_mean(scaled_combined_yeoh, batch_info)
+ggsave("dump/mean_yeoh.pdf", mean_plot,
+       width = 12, height = 8)
+col_mean <- colMeans(scaled_combined_yeoh)
+which(col_mean > 1100)
+
+outlier_samples <- c("P198_D0", "P186_D8", "N03")
+outlier_index <- which(colnames(scaled_combined_yeoh) %in% outlier_samples)
+selected_scaled_yeoh <- scaled_combined_yeoh[,-outlier_index]
+shape_2d1 <- rep(21:24, c(209,209,59,3))
+batch_info1 <- yeoh_batch[colnames(selected_scaled_yeoh), "batch"]
+batch_colour1 <- batch_palette[batch_info1]
+plot.pca_3d(selected_scaled_yeoh, batch_colour1, shape_2d1, list(2,1,1))
+rgl.postscript("dump/pca_3d-yeoh_scaled_selected.pdf", "pdf")
+
+# Quantile-normalised (old)
+quantile_yeoh <- norm.quantile(selected_scaled_yeoh)
+plot.pca_3d(quantile_yeoh, batch_colour1, shape_2d1, list(2,1,1))
+rgl.postscript("dump/pca_3d-yeoh_quantile.pdf", "pdf")
+
+# GFS
+gfs_yeoh <- norm.gfs(selected_scaled_yeoh)
+plot.pca_3d(gfs_yeoh, batch_colour1, shape_2d1, list(2,1,1))
+rgl.postscript("dump/pca_3d-yeoh_gfs.pdf", "pdf")
+
+# Quantile-normalised (old)
+quantile_d0 <- norm.quantile(selected_scaled_yeoh[,1:209])
+quantile_d8 <- norm.quantile(selected_scaled_yeoh[,210:418])
+quantile_d33 <- norm.quantile(selected_scaled_yeoh[,419:480])
+quantile1_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33)
+plot.pca_3d(quantile1_yeoh, batch_colour1, shape_2d1, list(2,1,1))
+rgl.postscript("dump/pca_3d-quantile_new.pdf", "pdf")
+
+# QUANTILE (DATA) ---------------------------------------------------------
+d33_label <- yeoh_label[substring(colnames(yeoh_d33), 1, 4), "label", drop = F]
+# D33 patients that experience remission
+d33_remission <- rownames(d33_label)[d33_label == 0 & !is.na(d33_label)]
+yeoh_remission <- yeoh_d33[, paste0(d33_remission, "_D33")]
+
+# Filtering of probesets
+selected_probesets <- filter_probesets(scaled_combined_yeoh, 0.2)
+
+# Quantile (old)
+quantile_yeoh <- norm.quantile(scaled_combined_yeoh)
+quantile1_d0 <- quantile_yeoh[,1:210]
+quantile1_d8 <- quantile_yeoh[,211:420]
+quantile1_d33 <- quantile_yeoh[,420:479]
+quantile1_normal <- quantile_yeoh[,480:483]
+
+# # Quantile by timepoint
+# quantile_d0 <- norm.quantile(scaled_combined_yeoh[selected_probesets, 1:210])
+# quantile_d8 <- norm.quantile(scaled_combined_yeoh[selected_probesets, 211:420])
+# quantile_d33 <- norm.quantile(yeoh_d33[selected_probesets,])
+# quantile_normal <- norm.quantile(scaled_combined_yeoh[selected_probesets, 480:483])
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(cbind(quantile1_d0, quantile1_d8), 210, is_paired = T)
+log_fc <- calc_logfc(quantile1_d0, quantile1_d8)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+log_d0 <- log2_transform(quantile1_d0[intersect_probesets,])
+log_d8 <- log2_transform(quantile1_d8[intersect_probesets,])
+log_normal <- log2_transform(quantile1_normal[intersect_probesets,])
+log_d33 <- log2_transform(quantile1_d33[intersect_probesets,])
+
+# PCA basis: D0 and normal
+transposed_df <- t(cbind(log_d0, log_d33))
+pca_obj <- prcomp(transposed_df, center = T, scale. = T)
+pca_basis <- pca_obj$x[,1:4]
+
+# Projection of D8 data
+add_data <- t(cbind(log_d8, log_normal))
+pca_add <- predict(pca_obj, add_data)[,1:4]
+plot_arr <- rbind(pca_basis[1:210,],
+                  pca_add[1:210,],
+                  pca_basis[-(1:210),],
+                  pca_add[-(1:210),])
+
+# PCA: Eigenvalues
+eig_value <- (pca_obj$sdev)^2
+var_pc <- eig_value[1:5]/sum(eig_value)
+pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+
+# Calculating ERM results
+pca_arr <- plot_arr[,1:3]
+colnames(pca_arr)
+rownames(pca_arr)
+dim(pca_arr)
+response_df <- pca_arr[1:420,]
+normal_df <- pca_arr[421:480,]
+rownames(normal_df)
+erm <- calc_erm1(response_df, normal_df)
+
+# Only consider PC1
+pca_arr <- plot_arr[,1]
+response_vec <- pca_arr[1:420]
+erm <- response_vec[-(1:210)] - response_vec[1:210]
 
 # QUANTILE (NEW) ---------------------------------------------------------------
 # Trimmed-mean scaling
@@ -732,14 +888,12 @@ ggsave("dump/vectors-quantile_union_subtype.pdf", vectors_plot,
 
 # RESULTS -----------------------------------------------------------------
 ### Extracting truth labels and training/test
-labels_yeoh <- yeoh_metadata[names(erm), c(6, 8, 12)]
+head(yeoh_label)
+labels_yeoh <- yeoh_label[substring(names(erm),1,4), 5:6]
 results_df <- cbind(erm, labels_yeoh)
+# results_df[order(results_df$erm),]
 
-# Change truth labels with value 2 to 1
-results_df[results_df$event_code == 2, 4] <- 1
-results_df[order(results_df$erm),]
-
-write.table(results_df, "dump/results-quantile_union_subtype.tsv",
+write.table(results_df, "dump/results-quantile_baseline_d33_centroid.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 # Investigate
@@ -770,14 +924,14 @@ results2_vec <- results_2[order(rownames(results_2)), 1]
 results3_vec <- results_3[order(rownames(results_3)), 1]
 
 # Visualise results now
-labels_vec <- results_df[order(rownames(results_df)), 4]
+labels_vec <- results_df[order(rownames(results_df)), 2]
 results_vec <- results_df[order(rownames(results_df)), 1]
 
 par(mar = rep(5,4))
 plot_roc(list(results_vec), labels_vec,
-         name_vec = c("Quantile normalisation"))
+         name_vec = c("Quantile (baseline)"))
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/roc-quantile_union_subtype.pdf",
+save_fig(results_roc, "dump/roc-quantile_d33_centroid.pdf",
          width = 9, height = 9)
 
 # yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
@@ -792,24 +946,39 @@ save_fig(results_roc, "dump/roc-quantile_union_subtype.pdf",
 # MILE: Normal samples ----------------------------------------------------
 # PCA
 plot.pca_batch <- function(untransformed_df, colour_vec, shape_vec = 19) {
+  colour_vec <- as.factor(colour_vec)
   pca_obj <- prcomp(t(untransformed_df))
   df <- data.frame(pca_obj$x[,1:5])
   eig_value <- (pca_obj$sdev)^2
   var_pc <- eig_value[1:5]/sum(eig_value)
   pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
   # Scatter plots
+  # pc1_pc2 <- ggplot(df, aes(x = PC1, y = PC2)) +
+  #   geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+  #   xlab(pc_labels[1]) + ylab(pc_labels[2])
+  # pc2_pc3 <- ggplot(df, aes(x = PC2, y = PC3)) +
+  #   geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+  #   xlab(pc_labels[2]) + ylab(pc_labels[3])
+  # pc1_pc3 <- ggplot(df, aes(x = PC1, y = PC3)) +
+  #   geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+  #   xlab(pc_labels[1]) + ylab(pc_labels[3])
+  # pc3_pc4 <- ggplot(df, aes(x = PC3, y = PC4)) +
+  #   geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+  #   xlab(pc_labels[3]) + ylab(pc_labels[4])
+  
   pc1_pc2 <- ggplot(df, aes(x = PC1, y = PC2)) +
-    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_vec, shape = shape_vec, show.legend = F) +
     xlab(pc_labels[1]) + ylab(pc_labels[2])
   pc2_pc3 <- ggplot(df, aes(x = PC2, y = PC3)) +
-    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_vec, shape = shape_vec, show.legend = F) +
     xlab(pc_labels[2]) + ylab(pc_labels[3])
   pc1_pc3 <- ggplot(df, aes(x = PC1, y = PC3)) +
-    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_vec, shape = shape_vec, show.legend = F) +
     xlab(pc_labels[1]) + ylab(pc_labels[3])
   pc3_pc4 <- ggplot(df, aes(x = PC3, y = PC4)) +
-    geom_point(size = 2, col = colour_vec, shape = shape_vec, show.legend = F) +
+    geom_point(size = 3, fill = colour_vec, shape = shape_vec, show.legend = F) +
     xlab(pc_labels[3]) + ylab(pc_labels[4])
+  
   multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3, pc3_pc4,
                          ncol = 2, nrow = 2)
   return(multiplot)
