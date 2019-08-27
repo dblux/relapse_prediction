@@ -105,19 +105,19 @@ norm_cdf <- function(df) {
   return(df)
 }
 
-plot.pca_3d <- function(df, colour_code) {
-  pca_obj <- prcomp(t(df))
-  pca_arr <- as.data.frame(pca_obj$x[,1:5])
-  # RGL plot parameters
-  rgl.open()
-  rgl.bg(color="white")
-  rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
-  par3d(windowRect = c(50, 20, 500, 500))
-  aspect3d(1,1,1)
-  # Plot of MILE dataset
-  with(pca_arr, plot3d(PC1, PC2, PC3, col = colour_code,
-                       type = "p", size = 5))
-}
+# plot.pca_3d <- function(df, colour_code) {
+#   pca_obj <- prcomp(t(df))
+#   pca_arr <- as.data.frame(pca_obj$x[,1:5])
+#   # RGL plot parameters
+#   rgl.open()
+#   rgl.bg(color="white")
+#   rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
+#   par3d(windowRect = c(50, 20, 500, 500))
+#   aspect3d(1,1,1)
+#   # Plot of MILE dataset
+#   with(pca_arr, plot3d(PC1, PC2, PC3, col = colour_code,
+#                        type = "p", size = 5))
+# }
 
 # Function that calculates the matrix of mean differences from the patient and control matrix
 # Arguments: a <- larger matrix, b <- smaller matrix
