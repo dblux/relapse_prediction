@@ -126,7 +126,7 @@ ggsave("dump/plot_qnorm.pdf", plot_qnorm,
 # Creation of pData dataframe (metadata)
 class <- as.factor(substring(colnames(raw_maqc), 7, 7))
 batch <- as.factor(substring(colnames(raw_maqc), 5, 5))
-maqc_metadata <- data.frame(shape_info, batch_info)
+maqc_metadata <- data.frame(class, batch)
 # Rownames of metadata are same as colnames of data df
 rownames(maqc_metadata) <- colnames(raw_maqc)
 
@@ -136,6 +136,9 @@ scaled_maqc <- norm.mean_scaling(raw_maqc)
 selected_probetsets <- filter_probesets(scaled_maqc, 0.2)
 filtered_maqc <- scaled_maqc[selected_probetsets,]
 
+# Place adjustment/confounding variables in model.matrix (e.g. age)
+# Do not put batch variables in model.matrix
+# Put batch variables directly in combat function
 model_combat <- model.matrix(~1, data = maqc_metadata)
 combat_maqc <- ComBat(data.matrix(filtered_maqc), maqc_metadata$batch_info, model_combat)
 

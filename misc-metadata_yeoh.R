@@ -164,3 +164,20 @@ patient_metadata <- cbind(mrd_df[,3:6], label = mrd_df$event_code, training_test
 patient_metadata$label[patient_metadata$label == 2] <- 1
 write.table(patient_metadata, "data/GSE67684/processed/metadata_combined-label.tsv",
             quote = F, sep = "\t")
+
+# Appending subtype information to metadata labels
+subtype_df <- read.table("data/GSE67684/README/subtype_erm_data.txt",
+                         sep = "\t", header = T)
+mrd_df <- read.table("data/GSE67684/README/labels_MRD.tsv",
+                     sep = "\t", header = T, comment.char = "")
+merged_df <- merge(subtype_df, mrd_df[,1:2], by.x = "lab_id", by.y = "labid")
+rownames(merged_df) <- sprintf("P%03d", merged_df[,3])
+
+metadata_label <- read.table("data/GSE67684/processed/metadata_combined-label.tsv",
+                             sep = "\t", header = T)
+head(metadata_label1)
+subtype <- merged_df[rownames(metadata_label), "subtype"]
+metadata_label1 <- cbind(metadata_label, subtype)
+
+write.table(metadata_label1, "data/GSE67684/processed/metadata_combined-label_subtype.tsv",
+            quote = F, sep = "\t")

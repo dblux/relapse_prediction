@@ -1,6 +1,7 @@
 # library(Rtsne)
 # library(dendextend)
-# library(scran)
+library(sva)
+library(scran)
 library(rgl)
 library(ggplot2)
 library(cowplot)
@@ -8,8 +9,9 @@ library(reshape2)
 library(RColorBrewer)
 source("../functions.R")
 
-theme_set(theme_dark())
-# theme_set(theme_cowplot())
+# theme_set(theme_dark())
+theme_set(theme_cowplot())
+theme_set(theme_gray())
 # FUNCTIONS ---------------------------------------------------------------
 # Filter probes with too many zeros
 filter_probesets <- function(df, percent_threshold) {
@@ -123,17 +125,17 @@ calc_erm3 <- function(response_df, normal_df) {
   response_pc1 <- response_df[,1]
   normal_pc1 <- normal_df[,1]
   d0d8_pc1 <- response_pc1[-(1:num_patient)] - response_pc1[1:num_patient]
-  d0normal_pc1 <- median(normal_pc1) - response_vec[1:num_patient]
+  d0normal_pc1 <- median(normal_pc1) - response_pc1[1:num_patient]
   return(cbind(erm = d0d8_pc1, erm_ratio = d0d8_pc1/d0normal_pc1))
 }
-brewer.pal("Set1")
+
 # Plots ROC and calculates AUC in a primitive fashion (i.e. ROC is step function)
 # Does not resolve ties in the score
 # Assumption: Lower score will be labelled preferentially as 1, ROC is step function
 # Assumption that score vec and label vecs are corresponding
 plot_roc <- function(score_list, label_vec,
-                     is_bigger_better_vec = rep(F, length(score_list)),
-                     name_vec = NULL) {
+                     name_vec = NULL, plot_title = NULL,
+                     is_bigger_better_vec = rep(F, length(score_list))) {
   # Function to plot a single ROC curve and calculate AUC
   ROC_AUC <- function(score_vec, is_bigger_better, color) {
     # Sort label vector according to score vector in ascending order
@@ -152,8 +154,10 @@ plot_roc <- function(score_list, label_vec,
     return(AUC)
   }
   # Initialise plot
-  color_index <- (1:length(score_list)) + 1
-  plot(NULL,
+  colour_palette <- c("#1B9E77", "#D95F02", "#7570B3", "#E7298A",
+                      "#66A61E", "#E6AB02", "#A6761D", "#666666")
+  color_index <- colour_palette[1:length(score_list)]
+  plot(NULL, main = plot_title,
        xlab = "1 - Specificity", ylab = "Sensitivity",
        xlim = c(0,1), ylim = c(0,1),
        xaxs = "i", yaxs = "i",
@@ -163,9 +167,7 @@ plot_roc <- function(score_list, label_vec,
                     color_index, SIMPLIFY = T)
   # If name_vec is not NULL display legend
   if (!is.null(name_vec)) {
-    format_text <- function(name, auc) {
-      return(sprintf("%s (%.3f)", name, auc))
-    }
+    format_text <- function(name, auc) sprintf("%s (%.3f)", name, auc)
     legend_text <- mapply(format_text, name_vec, auc_vec)
     legend("bottomright", inset = 0.03, lty = 1, lwd = 2,
            cex = 1.4, bty = "o", text.width = 0.45,
@@ -221,6 +223,31 @@ pca_all <- function(df, colour_code, shape_vec, pc_labels) {
   return(multiplot)
 }
 
+# 3D PCA plot
+plot.pca_3d <- function(df, colour_code, shape_vec, pc_labels = NULL, ratio_list = list(2,1,1)) {
+  if (is.null(pc_labels)) {
+    pca_obj <- prcomp(t(df))
+    pca_df <- as.data.frame(pca_obj$x[,1:3])
+    eig_value <- (pca_obj$sdev)^2
+    var_pc <- eig_value[1:3]/sum(eig_value)
+    pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
+  } else pca_df <- as.data.frame(df)
+  # RGL plot parameters
+  rgl.open()
+  rgl.bg(color="white")
+  rgl.viewpoint(zoom = 0.8)
+  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
+  par3d(windowRect = c(50, 20, 500, 500))
+  # Plot of MILE dataset
+  with(pca_df, pch3d(PC1, PC2, PC3, bg = colour_code,
+                     pch = shape_vec, cex = 0.5, lwd = 1.5))
+  box3d(col = "black")
+  title3d(xlab = pc_labels[1], ylab = pc_labels[2],
+          zlab = pc_labels[3], col = "black")
+  # Plot aspect ratios of axis according to variance
+  do.call(aspect3d, ratio_list)
+}
+
 plot.vectors_3d <- function(vectors_arr, colour_code, shape_vec, pc_labels = NULL, ratio_list = list(2,1,1)) {
   if (is.null(pc_labels)) {
     pca_obj <- prcomp(t(df))
@@ -232,17 +259,46 @@ plot.vectors_3d <- function(vectors_arr, colour_code, shape_vec, pc_labels = NUL
   # RGL plot parameters
   rgl.open()
   rgl.bg(color="white")
+  rgl.viewpoint(zoom = 0.8)
   # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
   # par3d(windowRect = c(50, 20, 500, 500))
   label_colour <- ifelse(vectors_arr[,7] == 0, "black", "red")
   arrows_df <- data.frame(t(vectors_arr[,1:6]))
   mapply(arrow3d, arrows_df[1:3,], arrows_df[4:6,],
          s = 0.05, type = "line", col = label_colour)
-  box3d(col = "black")
+  box3d(col = "black", expand = 0.5)
   title3d(xlab = pc_labels[1], ylab = pc_labels[2], zlab = pc_labels[3],
           col = "black")
   # Plot aspect ratios of axis according to variance
   do.call(aspect3d, ratio_list)
+}
+
+# Plot vectors 2D
+plot_vectors <- function(df, centroid_df, pc_labels, batch_colour, subtype_size) {
+  pca_1 <- ggplot(data = df) +
+    geom_point(aes(x = PC1_A, y = PC2_A), size = subtype_size,
+               col = batch_colour, show.legend = F) +
+    geom_point(aes(x = PC1_B, y = PC2_B), size = subtype_size,
+               shape = 15, col = batch_colour, show.legend = F) +
+    geom_point(data = centroid_df, aes(x = PC1, y = PC2),
+               size = 5, shape = 17, colour = c("goldenrod3", "gold", "darkgreen", "darkolivegreen3")) +
+    geom_segment(aes(x = PC1_A, y = PC2_A, xend = PC1_B, yend = PC2_B, colour = as.factor(labels)),
+                 arrow = arrow(length = unit(0.3, "cm")), alpha = 0.8, show.legend = F) +
+    scale_color_manual(values = c("black",  "red")) +
+    xlab(pc_labels[1]) + ylab(pc_labels[2])
+  pca_2 <- ggplot(data = df) +
+    geom_point(aes(x = PC3_A, y = PC2_A), size = subtype_size,
+               col = batch_colour, show.legend = F) +
+    geom_point(aes(x = PC3_B, y = PC2_B), size = subtype_size,
+               shape = 15, col = batch_colour, show.legend = F) +
+    geom_point(data = centroid_df, aes(x = PC2, y = PC3),
+               size = 5, shape = 17, colour = c("goldenrod3", "gold", "darkgreen", "darkolivegreen3")) +
+    geom_segment(aes(x = PC3_A, y = PC2_A, xend = PC3_B, yend = PC2_B, colour = as.factor(labels)),
+                 arrow = arrow(length = unit(0.3, "cm")), alpha = 0.8, show.legend = F) +
+    scale_color_manual(values = c("black",  "red")) +
+    xlab(pc_labels[3]) + ylab(pc_labels[2])
+  multiplot <- plot_grid(pca_1, pca_2, ncol = 2)
+  return(multiplot)
 }
 
 
@@ -253,17 +309,10 @@ yeoh_d33 <- read.table("data/leuk_D33/processed/mas5_filtered.tsv",
                        sep = "\t", header = T, row.names = 1)
 yeoh_normal <- read.table("data/leuk_normal/processed/mas5_filtered.tsv",
                           sep = "\t", header = T, row.names = 1)
-# yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
-#                             sep = "\t", header = T, row.names = 1)
 yeoh_batch <- read.table("data/GSE67684/processed/metadata_combined-batch.tsv",
                          sep = "\t", header = T, row.names = 1)
-yeoh_label <- read.table("data/GSE67684/processed/metadata_combined-label.tsv",
+yeoh_label <- read.table("data/GSE67684/processed/metadata_combined-label_subtype.tsv",
                          sep = "\t", header = T, row.names = 1)
-
-mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
-                        sep = "\t", header = T, row.names = 1)
-mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
-                            sep = "\t", header = T, row.names = 1)
 
 # Removal of outlier samples and their associated pairs
 # Patients "P198_D8", "P186_D0" are associated pairs
@@ -276,6 +325,11 @@ d33_label <- yeoh_label[substring(colnames(yeoh_d33), 1, 4), "label", drop = F]
 # D33 patients that experience remission
 d33_remission <- rownames(d33_label)[d33_label == 0 & !is.na(d33_label)]
 yeoh_remission <- yeoh_d33[, paste0(d33_remission, "_D33")]
+
+mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
+                        sep = "\t", header = T, row.names = 1)
+mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
+                            sep = "\t", header = T, row.names = 1)
 
 # VISUALISATION -----------------------------------------------------------
 yeoh_combined <- cbind(yeoh_d0d8, yeoh_d33, yeoh_normal)
@@ -290,30 +344,6 @@ shape_2d <- rep(21:24, c(210,210,59,4))
 plot_pca2d <- plot.pca_batch(yeoh_combined, batch_colour, shape_2d)
 ggsave("dump/pca_2d-yeoh_unnorm.pdf", plot_pca2d,
        width = 9, height = 9)
-
-# 3D PCA plot
-plot.pca_3d <- function(df, colour_code, shape_vec, pc_labels = NULL, ratio_list = list(2,1,1)) {
-  if (is.null(pc_labels)) {
-    pca_obj <- prcomp(t(df))
-    pca_df <- as.data.frame(pca_obj$x[,1:3])
-    eig_value <- (pca_obj$sdev)^2
-    var_pc <- eig_value[1:3]/sum(eig_value)
-    pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
-  } else pca_df <- as.data.frame(df)
-  # RGL plot parameters
-  rgl.open()
-  rgl.bg(color="white")
-  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
-  par3d(windowRect = c(50, 20, 500, 500))
-  # Plot of MILE dataset
-  with(pca_df, pch3d(PC1, PC2, PC3, bg = colour_code,
-                       pch = shape_vec, cex = 0.5, lwd = 1.5))
-  box3d(col = "black")
-  title3d(xlab = pc_labels[1], ylab = pc_labels[2], zlab = pc_labels[3],
-          col = "black")
-  # Plot aspect ratios of axis according to variance
-  do.call(aspect3d, ratio_list)
-}
 
 plot.pca_3d(yeoh_combined, batch_colour, shape_2d)
 rgl.viewpoint(zoom = 0.8)
@@ -363,24 +393,38 @@ quantile1_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33)
 plot.pca_3d(quantile1_yeoh, batch_colour1, shape_2d1, list(2,1,1))
 rgl.postscript("dump/pca_3d-quantile_new.pdf", "pdf")
 
-# QUANTILE (BASELINE) ---------------------------------------------------------
+# QUANTILE ---------------------------------------------------------
 yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
 scaled_yeoh <- norm.mean_scaling(yeoh_combined)
 # Filtering of probesets
 selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
 
-# Quantile (all time points together)
-quantile_yeoh <- norm.quantile(scaled_yeoh[selected_probesets,])
-quantile_d0 <- quantile_yeoh[,1:208]
-quantile_d8 <- quantile_yeoh[,209:416]
-quantile_d33 <- quantile_yeoh[,417:458]
-quantile_normal <- quantile_yeoh[,459:461]
+# # Quantile (all time points together)
+# quantile_yeoh <- norm.quantile(scaled_yeoh[selected_probesets,])
+# quantile_d0 <- quantile_yeoh[,1:208]
+# quantile_d8 <- quantile_yeoh[,209:416]
+# quantile_d33 <- quantile_yeoh[,417:458]
+# quantile_normal <- quantile_yeoh[,459:461]
 
-# # Quantile by timepoint
-# quantile_d0 <- norm.quantile(scaled_combined_yeoh[selected_probesets, 1:210])
-# quantile_d8 <- norm.quantile(scaled_combined_yeoh[selected_probesets, 211:420])
-# quantile_d33 <- norm.quantile(yeoh_d33[selected_probesets,])
-# quantile_normal <- norm.quantile(scaled_combined_yeoh[selected_probesets, 480:483])
+# Quantile by timepoint
+quantile_d0 <- norm.quantile(scaled_yeoh[selected_probesets, 1:208])
+quantile_d8 <- norm.quantile(scaled_yeoh[selected_probesets, 209:416])
+quantile_d33 <- norm.quantile(scaled_yeoh[selected_probesets, 417:458])
+quantile_normal <- norm.quantile(scaled_yeoh[selected_probesets, 459:461])
+quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33, quantile_normal)
+colnames(scaled_yeoh)[459:461]
+dim(scaled_yeoh)
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(quantile_yeoh), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:24, c(208,208,42,3))
+plot.pca_3d(quantile_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-quantile_timepoint_all_feature.pdf", "pdf")
 
 # Selecting drug responsive genes between D0 and D8
 ttest_pvalue <- calc_ttest(cbind(quantile_d0, quantile_d8), 208, is_paired = T)
@@ -400,41 +444,35 @@ log_d33 <- log2_transform(quantile_d33[intersect_probesets,])
 # log_normal <- quantile_normal
 # log_d33 <- quantile_d33
 
-# Defining PCA using all samples
-log_quantile <- cbind(log_d0, log_d8, log_d33, log_normal)
-batch_info <- yeoh_batch[colnames(log_quantile), "batch"]
-generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-batch_palette <- generate_colour(10)
-batch_colour <- batch_palette[batch_info]
-shape_vec <- rep(21:24, c(208,208,42,3))
-plot.pca_3d(log_quantile, batch_colour, shape_vec, list(2,1,1))
-rgl.viewpoint(zoom = 0.8)
-rgl.postscript("dump/pca_3d-quantile_tgt_all_feature.pdf", "pdf")
+# MILE data
+scaled_mile <- norm.mean_scaling(mile_data[selected_probesets, 751:824])
+quantile_mile <- norm.quantile(scaled_mile)
+log_mile <- log2_transform(quantile_mile[intersect_probesets,])
+transposed_df <- t(cbind(log_d0, log_mile))
 
 # PCA basis: D0 and normal
 transposed_df <- t(cbind(log_d0, log_d33, log_normal))
 pca_obj <- prcomp(transposed_df, center = T, scale. = T)
+# PCA coordinates
 pca_basis <- pca_obj$x[,1:3]
-
-# Projection of D8 data
-add_data <- t(log_d8)
-pca_add <- predict(pca_obj, add_data)[,1:3]
-plot_arr <- rbind(pca_basis[1:208,],
-                  pca_add,
-                  pca_basis[-(1:208),])
-# PCA: Eigenvalues
+# PCA eigenvalues
 eig_value <- (pca_obj$sdev)^2
 var_pc <- eig_value[1:5]/sum(eig_value)
 pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+# Projection of D8 data
+add_data <- t(log_d8)
+pca_add <- predict(pca_obj, add_data)[,1:3]
+# Final PCA coordinates arr
+plot_arr <- rbind(pca_basis[1:208,],
+                  pca_add,
+                  pca_basis[-(1:208),])
 
-plot.pca_3d(plot_arr, batch_colour, shape_vec, pc_labels)
-rgl.postscript("dump/pca_3d-quantile_tgt_select_feature_projected_d8.pdf", "pdf")
-
-# Calculating ERM results
-pca_arr <- plot_arr[,1:3]
-rownames(pca_arr)[417:461]
-dim(pca_arr)
 # Response df for D0 and D8 samples and D33 and normal samples for centroid
+response_df <- plot_arr[1:416, 1:3]
+normal_df <- plot_arr[417:461, 1:3]
+rownames(plot_arr)[417:490]
+rownames(response_df)
+rownames(normal_df)
 
 # Calculating ERM distance
 features_df1 <- calc_erm1(response_df, normal_df)
@@ -537,136 +575,14 @@ pca_arr <- plot_arr[,1]
 response_vec <- pca_arr[1:420]
 erm <- response_vec[-(1:210)] - response_vec[1:210]
 
-# QUANTILE ---------------------------------------------------------------
-# Trimmed-mean scaling
-scaled_yeoh <- norm_mean_scaling(yeoh_data)
-scaled_mile <- norm_mean_scaling(mile_data)
-# Pre-processing of yeoh_data
-selected_probes <- filter_probesets(scaled_yeoh, 0.2)
-filtered_yeoh <- scaled_yeoh[selected_probes,]
-# MILE data
-filtered_mile <- scaled_mile[selected_probes,]
-colnames(filtered_mile[,751:824])
-
-# # Quantile normalise whole dataset together
-# qnorm_data <- norm_quantile(cbind(filtered_yeoh, filtered_mile[,751:824]))
-# qnorm_yeoh <- qnorm_data[1:ncol(filtered_yeoh)]
-# qnorm_mile <- qnorm_data[-(1:ncol(filtered_yeoh))]
-
-# Quantile normalise by time point
-colnames(filtered_mile[,751:824])
-colnames(filtered_yeoh[,1:210])
-colnames(filtered_yeoh[,30:58])
-
-qnorm_d0_leukemia <- norm_quantile(cbind(filtered_yeoh[,1:210], filtered_mile[,1:750]))
-qnorm_d0 <- qnorm_d0_leukemia[,1:210]
-qnorm_leukemia <- qnorm_d0_leukemia[,-(1:210)]
-qnorm_d8 <- norm_quantile(filtered_yeoh[,-(1:210)])
-qnorm_normal <- norm_quantile(filtered_mile[,751:824])
-colnames(qnorm_leukemia)
-
-# Selecting drug responsive genes between D0 and D8
-ttest_pvalue <- calc_ttest(cbind(qnorm_d0, qnorm_d8), 210, is_paired = T)
-log_fc <- calc_logfc(qnorm_d0, qnorm_d8)
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-fc_probesets <- names(log_fc)[log_fc > 1]
-intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(intersect_probesets))
-
-# Selecting genes based on subtypes in MILE data
-leukemia_subtype <- substring(colnames(qnorm_leukemia),1,1)
-union_probesets <- character()
-for (subtype in LETTERS[1:8]){
-  print(subtype)
-  logfc <- calc_logfc(qnorm_normal, qnorm_leukemia[,leukemia_subtype == subtype])
-  probesets <- rownames(qnorm_normal)[logfc > 2]
-  union_probesets <- union(union_probesets, probesets)
-}
-
-# # Selecting drug responsive genes between D0 and D8 (Quantile: ALL)
-# ttest_pvalue <- calc_ttest(qnorm_yeoh, 210, is_paired = T)
-# log_fc <- calc_logfc(qnorm_yeoh[,1:210], qnorm_yeoh[,-(1:210)])
-# pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-# fc_probesets <- names(log_fc)[log_fc > 1]
-# intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-# print(length(intersect_probesets))
-
-log_d0 <- log2_transform(qnorm_d0[intersect_probesets,])
-log_d8 <- log2_transform(qnorm_d8[intersect_probesets,])
-log_normal <- log2_transform(qnorm_normal[intersect_probesets,])
-log_leukemia <- log2_transform(qnorm_leukemia[intersect_probesets,])
-dim(log_leukemia)
-
-# log_d0 <- log2_transform(qnorm_d0[union_probesets,])
-# log_d8 <- log2_transform(qnorm_d8[union_probesets,])
-# log_normal <- log2_transform(qnorm_normal[union_probesets,])
-# log_leukemia <- log2_transform(qnorm_leukemia[union_probesets,])
-# dim(log_leukemia)
-
-# PCA basis: D0 and normal
-transposed_df <- t(cbind(log_d0, log_normal))
-pca_obj <- prcomp(transposed_df, center = T, scale. = T)
-pca_basis <- pca_obj$x[,1:4]
-
-# Projection of D8 data
-add_data <- t(cbind(log_d8, log_leukemia))
-pca_add <- predict(pca_obj, add_data)[,1:4]
-plot_arr <- rbind(pca_add[-(1:210),],
-                  pca_basis[1:210,],
-                  pca_add[1:210,],
-                  pca_basis[-(1:210),])
-
-# PCA: Eigenvalues
-eig_value <- (pca_obj$sdev)^2
-var_pc <- eig_value[1:5]/sum(eig_value)
-pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-
-# Calculating ERM results
-pca_arr <- plot_arr[,1:3]
-colnames(pca_arr)
-dim(pca_arr)
-response_df <- pca_arr[751:1170,]
-normal_df <- pca_arr[1171:1244,]
-rownames(normal_df)
-erm <- calc_erm1(response_df, normal_df)
-
-# Only consider PC1
-pca_arr <- plot_arr[,1]
-response_vec <- pca_arr[1:420]
-erm <- response_vec[-(1:210)] - response_vec[1:210]
-
-# YEOH --------------------------------------------------------------------
-# Trimmed-mean scaling
-scaled_yeoh <- norm_mean_scaling(yeoh_data)
-scaled_mile <- norm_mean_scaling(mile_data)
-
-# Pre-processing of yeoh_data
-selected_probes <- filter_probesets(scaled_yeoh, 0.2)
-filtered_yeoh <- scaled_yeoh[selected_probes,]
-log_yeoh <- log2_transform(filtered_yeoh)
-
-# MILE data
-filtered_mile <- scaled_mile[selected_probes,]
-log_mile <- log2_transform(filtered_mile)
-
-qnorm_data <- norm_quantile(cbind(log_yeoh, log_mile))
-qnorm_yeoh <- qnorm_data[1:ncol(log_yeoh)]
-qnorm_mile <- qnorm_data[-(1:ncol(log_yeoh))]
-
-# Selection of down-regulated probes
-downreg_probes <- select_probes(qnorm_yeoh)
-# Check if all down-regulated probesets are present in MILE data
-sum(downreg_probes %in% rownames(qnorm_mile))
-leukemia_mile <- qnorm_mile[downreg_probes, 1:750]
-normal_mile <- qnorm_mile[downreg_probes, -(1:750)]
-yeoh_500_df <- qnorm_yeoh[downreg_probes,]
-erm <- calc_erm(t(leukemia_mile), t(normal_mile), t(yeoh_500_df))
-
 # GFS ---------------------------------------------------------------------
-# Pre-processing of yeoh_data
-selected_probes <- filter_probesets(yeoh_data, 0.2)
+yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
+scaled_yeoh <- norm.mean_scaling(yeoh_combined)
+# Filtering of probesets
+selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
+
 filtered_yeoh <- yeoh_data[selected_probes,]
-# log_yeoh <- log2_transform(filtered_yeoh)
+
 
 # MILE data
 filtered_mile <- mile_data[selected_probes,]
@@ -675,13 +591,13 @@ filtered_mile <- mile_data[selected_probes,]
 ### GFS normalisation and selection of probesets
 gfs_yeoh <- norm_gfs(filtered_yeoh)
 
-plot_tsne <- Rtsne(t(gfs_yeoh), dims = 2, perplexity = 50)
-names_index <- colnames(gfs_yeoh)
-batch_info <- yeoh_metadata[names_index,6]
-batch_palette <- brewer.pal(9, "Set1")
-batch_colour <- c(batch_palette[batch_info],
-                  batch_palette[batch_info])
-plot(plot_tsne$Y, col = batch_colour, pch = rep(c(17,19), each = 210))
+# plot_tsne <- Rtsne(t(gfs_yeoh), dims = 2, perplexity = 50)
+# names_index <- colnames(gfs_yeoh)
+# batch_info <- yeoh_metadata[names_index,6]
+# batch_palette <- brewer.pal(9, "Set1")
+# batch_colour <- c(batch_palette[batch_info],
+#                   batch_palette[batch_info])
+# plot(plot_tsne$Y, col = batch_colour, pch = rep(c(17,19), each = 210))
 # pca_gfs_yeoh <- plot_pca(gfs_yeoh)
 # ggsave("dump/pca-yeoh_gfs.pdf", pca_gfs_yeoh,
 #        width = 12, height = 8)
@@ -751,26 +667,14 @@ pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
 erm <- calc_erm(response_df, normal_df)
 
 # MNN ---------------------------------------------------------------------
-# Trimmed-mean scaling
-scaled_yeoh <- norm_mean_scaling(yeoh_data)
-scaled_mile <- norm_mean_scaling(mile_data)
-# Filter probesets
-selected_probes <- filter_probesets(scaled_yeoh, 0.2)
-filtered_yeoh <- yeoh_data[selected_probes,]
-filtered_mile <- mile_data[selected_probes,]
-# Feature selection using D0 and D8 data
-ttest_pvalue <- calc_ttest(filtered_yeoh, 210, is_paired = T)
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-log_fc <- calc_logfc(filtered_yeoh[,1:210], filtered_yeoh[,-(1:210)])
-fc_probesets <- names(log_fc)[log_fc > 1]
-intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(intersect_probesets))
-# Log-transform
-log_yeoh <- log2_transform(filtered_yeoh[intersect_probesets,])
-log_mile <- log2_transform(filtered_mile[intersect_probesets,])  
-
-batch_info <- yeoh_metadata[colnames(log_yeoh),6]
-batch_list <- lapply(1:9, function(i) log_yeoh[, batch_info == i])
+yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
+scaled_yeoh <- norm.mean_scaling(yeoh_combined)
+# Filtering of probesets
+selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
+selected_yeoh <- scaled_yeoh[selected_probesets,]
+# Splitting up yeoh data into batches
+batch_info <- yeoh_batch[colnames(selected_yeoh), "batch"]
+batch_list <- lapply(1:10, function(i) selected_yeoh[, batch_info == i])
 arr_list <- lapply(batch_list, data.matrix)
 
 colnum_list <- sapply(arr_list, ncol)
@@ -778,62 +682,164 @@ batch_order <- order(colnum_list, decreasing = T)
 print(batch_order)
 
 # Ordered according to number of samples in batch
-mnn_yeoh_obj <- mnnCorrect(arr_list[[3]],
-                           arr_list[[2]],
-                           arr_list[[8]],
+mnn_yeoh_obj <- mnnCorrect(arr_list[[2]],
                            arr_list[[9]],
-                           arr_list[[7]],
+                           arr_list[[10]],
+                           arr_list[[8]],
+                           arr_list[[5]],
+                           arr_list[[3]],
                            arr_list[[1]],
                            arr_list[[6]],
                            arr_list[[4]],
-                           arr_list[[5]])
+                           arr_list[[7]])
 mnn_yeoh <- do.call(cbind, mnn_yeoh_obj$corrected)
 
 # Column names for matrix arranged in above order
 colnames_vec <- unlist(sapply(arr_list[batch_order], colnames))
 colnames(mnn_yeoh) <- colnames_vec
+# Order columns according to name and timepoint
 ordered_mnn_yeoh <- mnn_yeoh[,order(colnames(mnn_yeoh))]
 ordered_mnn_yeoh1 <- cbind(ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "0")],
-                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "8")])
+                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "8")],
+                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "33")],
+                           ordered_mnn_yeoh[,startsWith(colnames(ordered_mnn_yeoh), "N")])
+# Replace negative values with zero
+ordered_mnn_yeoh1[ordered_mnn_yeoh1 < 0] <- 0
+# ordered_mnn_yeoh1[1:10,1:10]
 
-plot_mnn <- plot_pca(ordered_mnn_yeoh1, yeoh_metadata)
-plot_mnn
-ggsave("dump/pca-yeoh_mnn.pdf", plot_mnn,
-       width = 12, height = 4)
+mnn_d0 <- ordered_mnn_yeoh1[,1:208]
+mnn_d8 <- ordered_mnn_yeoh1[,209:416]
+mnn_d33 <- ordered_mnn_yeoh1[,417:458]
+mnn_normal <- ordered_mnn_yeoh1[,459:461]
 
-mnn_data_obj <- mnnCorrect(ordered_mnn_yeoh1, data.matrix(log_mile))
-mnn_data <- do.call(cbind, mnn_data_obj$corrected)
-colnames(mnn_data) <- c(colnames(ordered_mnn_yeoh1), colnames(log_mile))
-colnames(mnn_data)
-ncol(mnn_data)
-1244-74
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(ordered_mnn_yeoh1), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:24, c(208,208,42,3))
+plot.pca_3d(ordered_mnn_yeoh1*20, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-mnn_all_feature.pdf", "pdf")
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(cbind(mnn_d0, mnn_d8), 208, is_paired = T)
+log_fc <- calc_logfc(mnn_d0, mnn_d8)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+plot.pca_3d(selected_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-before_mnn.pdf", "pdf")
+
+# Filter and log transform
+log_mnn_yeoh <- log2_transform(ordered_mnn_yeoh1[intersect_probesets,])
+
 # PCA of D0 and normal data
-basis_data <- t(mnn_data[, c(1:210, 1171:1244)])
+basis_data <- t(log_mnn_yeoh[, c(1:208, 417:461)])
 rownames(basis_data)
 pca_obj <- prcomp(basis_data)
+# PCA: Coordinates
 pca_basis <- pca_obj$x[,1:4]
-# Projection of D8 and leukemia data
-add_data <- t(mnn_data[, -c(1:210, 1171:1244)])
-rownames(add_data)
-pca_add <- predict(pca_obj, add_data)[,1:4]
-plot_arr <- rbind(pca_basis[1:210,],
-                  pca_add[1:210,],
-                  pca_basis[-(1:210),])
 # PCA: Eigenvalues
 eig_value <- (pca_obj$sdev)^2
 var_pc <- eig_value[1:5]/sum(eig_value)
 pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+# Projection of D8 data
+add_data <- t(log_mnn_yeoh[, 209:416])
+rownames(add_data)
+pca_add <- predict(pca_obj, add_data)[,1:4]
+# Final PCA coordinates
+plot_arr <- rbind(pca_basis[1:208,],
+                  pca_add,
+                  pca_basis[-(1:208),])
+# Response df and normal df
+response_df <- plot_arr[1:416, 1:3]
+normal_df <- plot_arr[417:461, 1:3]
+rownames(normal_df)
 
-pca_arr <- rbind(pca_basis[1:210,],
-                 pca_add[1:210,],
-                 pca_basis[-(1:210),],
-                 pca_add[-(1:210),])
+# Calculating ERM distance
+features_df1 <- calc_erm1(response_df, normal_df)
+features_df2 <- calc_erm2(response_df, normal_df)
+features_df3 <- calc_erm3(response_df, normal_df)
 
-response_df <- pca_arr[1:420, 1:3]
-normal_df <- pca_arr[421:494, 1:3]
-leukemia_df <- pca_arr[495:1244, 1:3]
-rownames(leukemia_df)
-erm <- calc_erm(response_df, normal_df)
+
+# ComBat ------------------------------------------------------------------
+yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
+# Mean scaling of data
+scaled_yeoh <- norm.mean_scaling(yeoh_combined)
+# Filtering of probesets
+selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
+selected_yeoh <- scaled_yeoh[selected_probesets,]
+
+# Obtaining batch information of selected_yeoh df
+# Rows of metadata are to be in same order as columns of edata
+batch_info <- yeoh_batch[colnames(selected_yeoh), "batch"]
+yeoh_metadata <- data.frame(batch_info)
+# Place adjustment/confounding variables in model.matrix (e.g. age)
+# Do not put batch variables in model.matrix
+# Put batch variables directly in combat function
+model_combat <- model.matrix(~1, data = yeoh_metadata)
+combat_yeoh <- ComBat(data.matrix(selected_yeoh), batch_info, model_combat)
+# Replacing negative values with 0
+combat_yeoh[combat_yeoh < 0] <- 0
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:24, c(208,208,42,3))
+
+plot.pca_3d(combat_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-combat_all_feature.pdf", "pdf")
+plot.pca_3d(log2_transform(combat_yeoh), batch_colour, timepoint_shape)
+
+# Selecting drug responsive genes between D0 and D8
+combat_d0 <- combat_yeoh[,1:208]
+combat_d8 <- combat_yeoh[,209:416]
+ttest_pvalue <- calc_ttest(cbind(combat_d0, combat_d8), 208, is_paired = T)
+log_fc <- calc_logfc(combat_d0, combat_d8)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+# Filter and log transform
+log_combat_yeoh <- log2_transform(combat_yeoh[intersect_probesets,])
+
+# PCA of D0 and normal data
+basis_data <- t(log_combat_yeoh[, c(1:208, 417:461)])
+rownames(basis_data)
+pca_obj <- prcomp(basis_data)
+# PCA: Coordinates
+pca_basis <- pca_obj$x[,1:4]
+# PCA: Eigenvalues
+eig_value <- (pca_obj$sdev)^2
+var_pc <- eig_value[1:5]/sum(eig_value)
+pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+# Projection of D8 data
+# CHANGE
+add_data <- t(log_combat_yeoh[, 209:416])
+rownames(add_data)
+pca_add <- predict(pca_obj, add_data)[,1:4]
+# Final PCA coordinates
+plot_arr <- rbind(pca_basis[1:208,],
+                  pca_add,
+                  pca_basis[-(1:208),])
+
+# Response df and normal df
+response_df <- plot_arr[1:416, 1:3]
+normal_df <- plot_arr[417:461, 1:3]
+rownames(normal_df)
+
+# Calculating ERM distance
+features_df1 <- calc_erm1(response_df, normal_df)
+features_df2 <- calc_erm2(response_df, normal_df)
+features_df3 <- calc_erm3(response_df, normal_df)
 
 # Hierachical clustering --------------------------------------------------
 pairwise_dist <- dist(t(ordered_mnn_yeoh1[,1:210]))
@@ -859,75 +865,58 @@ save_fig(dendogram, "dump/hclust-mnn_yeoh.pdf",
          width = 12, height = 6)
 
 # PCA PLOT ----------------------------------------------------------------
-# # Subtype colours
-# num_subtype <- table(substring(rownames(plot_arr)[1:750], 1, 1))
-# red_palette <- brewer.pal(9, "Reds")[2:9]
-# subtype_colour <- rep(red_palette, num_subtype)
+# Plot PCA-3D
+plot.pca_3d(plot_arr, batch_colour, timepoint_shape, pc_labels)
+rgl.postscript("dump/pca_3d-combat_select_feature_projected_d8.pdf", "pdf")
 
-# Batch information of YEOH data
-num_patient <- nrow(response_df)/2
-batch_info <- yeoh_batch[rownames(response_df)[1:num_patient], "batch"]
-generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-batch_palette <- generate_colour(10)
-batch_colour <- batch_palette[batch_info]
-
-plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
-                    batch_shape, pc_labels)
-plot_pca
-ggsave("dump/pca-quantile_d0leuk_d8_normal.pdf", plot_pca,
-       width = 9, height = 9)
+# Plot PCA-2D
+# plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
+#                     batch_shape, pc_labels)
+# plot_pca
+# ggsave("dump/pca-quantile_d0leuk_d8_normal.pdf", plot_pca,
+#        width = 9, height = 9)
 
 # Visualising vectors
+# Subtype sizes
+num_patient <- nrow(response_df)/2
 row_index <- substring(rownames(response_df)[1:num_patient],1,4)
-labels_yeoh <- yeoh_label[row_index, 5]
+label_yeoh <- yeoh_label[row_index, "label"]
+subtype_yeoh <- yeoh_label[row_index, "subtype"]
+levels(subtype_yeoh) <- 1:8
+# For vectors plot
+patient_subtype <- as.numeric(subtype_yeoh)
+subtype_size <- c(rep(as.numeric(subtype_yeoh)/10, 2), rep(0.5, 45))
+dim(plot_arr)
+
+# Coordinates for arrows
 arrows_arr <- cbind(response_df[1:num_patient,],
                     response_df[-(1:num_patient),],
-                    matrix(labels_yeoh))
+                    matrix(label_yeoh))
 colnames(arrows_arr) <- c(paste(colnames(arrows_arr)[1:6],
                                 rep(LETTERS[1:2], each = 3),
                                 sep = "_"),
                           "labels")
-
+# Coordinates for centroids
 centroid_arr <- rbind(apply(response_df[1:num_patient,], 2, median),
                       apply(response_df[-(1:num_patient),], 2, median),
                       # apply(plot_arr[1:750, 1:3], 2, median),
                       apply(normal_df[1:42,], 2, median),
                       apply(normal_df[43:45,], 2, median))
 
-plot_vectors <- function(df, centroid_df, pc_labels, batch_colour) {
-  pca_1 <- ggplot(data = df) +
-    geom_point(aes(x = PC1_A, y = PC2_A), size = 3,
-               col = batch_colour, show.legend = F) +
-    geom_point(aes(x = PC1_B, y = PC2_B), size = 3,
-               shape = 15, col = batch_colour, show.legend = F) +
-    geom_point(data = centroid_df, aes(x = PC1, y = PC2),
-               size = 5, shape = 17, colour = c("purple4", "violet", "darkolivegreen3", "darkolivegreen1")) +
-    geom_segment(aes(x = PC1_A, y = PC2_A, xend = PC1_B, yend = PC2_B, colour = as.factor(labels)),
-                 arrow = arrow(length = unit(0.3, "cm")), alpha = 0.8, show.legend = F) +
-    scale_color_manual(values = c("black",  "red")) +
-    xlab(pc_labels[1]) + ylab(pc_labels[2])
-  pca_2 <- ggplot(data = df) +
-    geom_point(aes(x = PC2_A, y = PC3_A), size = 3,
-               col = batch_colour, show.legend = F) +
-    geom_point(aes(x = PC2_B, y = PC3_B), size = 3,
-               shape = 15, col = batch_colour, show.legend = F) +
-    geom_point(data = centroid_df, aes(x = PC2, y = PC3),
-               size = 5, shape = 17, colour = c("purple4", "violet", "darkolivegreen3", "darkolivegreen1")) +
-    geom_segment(aes(x = PC2_A, y = PC3_A, xend = PC2_B, yend = PC3_B, colour = as.factor(labels)),
-                 arrow = arrow(length = unit(0.3, "cm")), alpha = 0.8, show.legend = F) +
-    scale_color_manual(values = c("black",  "red")) +
-    xlab(pc_labels[2]) + ylab(pc_labels[3])
-  multiplot <- plot_grid(pca_1, pca_2, ncol = 2)
-  return(multiplot)
-}
-
+patient_colour <- batch_colour[1:num_patient]
 vectors_plot <- plot_vectors(as.data.frame(arrows_arr),
                              as.data.frame(centroid_arr),
                              pc_labels,
-                             batch_colour)
+                             patient_colour,
+                             patient_subtype)
 vectors_plot
-ggsave("dump/vectors-quantile_union_subtype.pdf", vectors_plot,
+ggsave("dump/vectors-combat.pdf", vectors_plot,
        width = 12, height = 6)
+
+# # Subtype colours
+# num_subtype <- table(substring(rownames(plot_arr)[1:750], 1, 1))
+# red_palette <- brewer.pal(9, "Reds")[2:9]
+# subtype_colour <- rep(red_palette, num_subtype)
 
 # # Batch information: Associating colour
 # num_subtype <- table(substring(colnames(mile_data), 1, 1))
@@ -951,45 +940,40 @@ ggsave("dump/vectors-quantile_union_subtype.pdf", vectors_plot,
 # batch_colour <- c(subtype_colour,
 #                   rep(blue_palette[batch_info], 2),
 #                   rep("darkolivegreen3", 74))
-# RESULTS -----------------------------------------------------------------
+
+# SAVE RESULTS -----------------------------------------------------------------
 ### Extracting truth labels and training/test
 features_df <- cbind(features_df1, features_df2, features_df3)
 colnames(features_df) <- c("erm1", "erm1_ratio", "erm2", "erm2_ratio", "erm3", "erm3_ratio")
 row_index <- substring(rownames(features_df),1,4)
+row_index
 labels_yeoh <- yeoh_label[row_index, 5:6]
 results_df <- cbind(features_df, labels_yeoh)
 rownames(results_df) <- row_index
 # results_df[order(results_df$erm),]
-write.table(results_df, "dump/results-quantile_baseline_d33_projected_d8.tsv",
+write.table(results_df, "dump/results-combat_d33_projected_d8.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
-# RETROSPECTIVE -----------------------------------------------------------
-results_1 <- read.table("dump/results-quantile_d0d8_pca_basis_top3_batch9.tsv",
-                        sep = "\t", header = T, row.names = 1)
-results_2 <- read.table("dump/results-quantile_d0d8_pca_basis_top3_calc2.tsv",
-                        sep = "\t", header = T, row.names = 1)
-results_3 <- read.table("dump/results-quantile_d0d8_pca_basis_top3_calc3.tsv",
-                        sep = "\t", header = T, row.names = 1)
-
-labels_vec <- results_1[order(rownames(results_1)), 4]
-results1_vec <- results_1[order(rownames(results_1)), 1]
-results2_vec <- results_2[order(rownames(results_2)), 1]
-results3_vec <- results_3[order(rownames(results_3)), 1]
-
-head(results_df)
-# Visualise results now
-results_vec1 <- results_df[, 1]
+# PLOT ROC -----------------------------------------------------------
+results_df <- read.table("dump/results-quantile_timepoint_d33_projected_d8.tsv",
+                         sep = "\t")
 labels_vec <- results_df[, 7]
+head(results_df[,1:6])
+
+# Visualise results now
+labels_vec <- results_df[, 7]
+labels_vec
 
 par(mar = rep(5,4))
 line_labels <- c("ERM1", "ERM1-Ratio",
                  "ERM2", "ERM2-Ratio",
                  "PC1", "PC1-Ratio")
+plot_title <- "ComBat; D33 centroid; PCA (projected D8)"
 plot_roc(results_df[,1:6], labels_vec,
-         name_vec = line_labels)
+         name_vec = line_labels, plot_title)
 
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/roc-quantile_baseline.pdf",
+save_fig(results_roc, "dump/roc-combat.pdf",
          width = 9, height = 9)
 
 # yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
