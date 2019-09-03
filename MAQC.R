@@ -1,8 +1,8 @@
 library(reshape2)
 library(ggplot2)
 library(cowplot)
-library(scran)
-library(sva)
+# library(scran)
+# library(sva)
 source("../functions.R")
 
 # Assumes that dataframe has been log-transformed
@@ -66,12 +66,172 @@ colnames(raw_maqc)
 batch_info <- rep(1:6, each = 10)
 shape_info <- rep(rep(1:2, each = 5), 6)
 
+
+# EXPLORE -----------------------------------------------------------------
+# No normalisation
+plot_before <- plot_batch(raw_maqc, batch_info, shape_info)
+plot_before
+ggsave("dump/plot_before.pdf", plot_before,
+       width = 6, height = 6)
+
+# Select only rows with all zeros
+no_zero_maqc <- raw_maqc[rowSums(raw_maqc == 0) == 0,]
+filtered_plot <- plot_batch(no_zero_maqc, batch_info, shape_info)
+# Selecting only probesets without zeros accentuates the batch effects
+filtered_plot
+
+batch_1_A <- raw_maqc[,1:5]
+batch_2_A <- raw_maqc[,11:15]
+batch_1_2_A <- cbind(batch_1_A, batch_2_A)
+# Select only rows with all zeros
+filtered_1_2_A <- batch_1_2_A[rowSums(batch_1_2_A == 0) == 0,]
+rank_1_2_A <- apply(filtered_1_2_A, 2, rank)
+rank_1_A <- rank_1_2_A[,1:5]
+rank_2_A <- rank_1_2_A[,6:10]
+
+batch_1_A_sd <- apply(rank_1_A, 1, sd)
+batch_2_A_sd <- apply(rank_2_A, 1, sd)
+hist(batch_1_A_sd, breaks = 60)
+hist(batch_2_A_sd, breaks = 60)
+low_ps <- names(batch_1_A_sd[batch_1_A_sd < 100])
+high_ps <- names(batch_1_A_sd[batch_1_A_sd > 2000])
+# Most of the probesets with low sd in ranks are highly expressed
+rank_1_A[high_ps,]
+# 22155 probesets
+dim(rank_1_A)
+# Ratio of technical variation to signal
+# If ratio passed threshold of one (MAYBE)
+
+batch_1_B <- raw_maqc[,6:10]
+batch_2_B <- raw_maqc[,16:20]
+batch_1_2_B <- cbind(batch_1_B, batch_2_B)
+# Select only rows with all zeros
+filtered_1_2_B <- batch_1_2_B[rowSums(batch_1_2_B == 0) == 0,]
+rank_1_2_B <- apply(filtered_1_2_B, 2, rank)
+rank_1_B <- rank_1_2_B[,1:5]
+rank_2_B <- rank_1_2_B[,6:10]
+
+batch_1_B_sd <- apply(rank_1_B, 1, sd)
+batch_2_B_sd <- apply(rank_2_B, 1, sd)
+hist(batch_1_B_sd, breaks = 60)
+hist(batch_2_B_sd, breaks = 60)
+rank_diff_B <- rowMeans(rank_1_B) - rowMeans(rank_2_B)
+hist(rank_diff_B, breaks = 60)
+little_change_B <- names(rank_diff_B[rank_diff_B > -1 & rank_diff_B < 1])
+rank_1_B[little_change_B,]
+rank_2_B[little_change_B,]
+
+# Selection of probesets
+# Do not select probesets with high variance (Technical and biological variance)
+rank_diff_A <- rowMeans(rank_1_A) - rowMeans(rank_2_A)
+batch_1_A_sd[1:10]
+batch_2_A_sd[1:10]
+mean(rank_diff)
+sd(rank_diff)
+hist(rnorm(20000,0,1688), breaks = 80, col = "lightblue")
+hist(rank_diff, breaks = 80, col = "tomato")
+
+
+# PCA loadings ------------------------------------------------------------
+col_logical <- apply(t(df), 2, var) != 0
+pca_df <- t(df)[, col_logical]
+pca_obj <- prcomp(pca_df, center = T, scale. = T)
+top_pc <- as.data.frame(pca_obj$x[,1:2])
+
+df <- scaled_maqc
+col_logical <- apply(t(df), 2, var) != 0
+pca_df <- t(df)[, col_logical]
+pca_obj <- prcomp(pca_df, center = T, scale. = T)
+top_pc <- as.data.frame(pca_obj$x[,1:2])
+hist(pca_obj$rotation[,3], breaks = 50)
+loading_1 <- pca_obj$rotation[,1]
+head(loading_1)
+sorted_loading_1 <- sort(abs(loading_1), decreasing = T)
+head(sorted_loading_1)
+
+loading_2 <- pca_obj$rotation[,2]
+sorted_loading_2 <- sort(abs(loading_2), decreasing = T)
+ps_2 <- names(head(sorted_loading_2, 2000))
+
+loading_3 <- pca_obj$rotation[,3]
+sorted_loading_3 <- sort(abs(loading_3), decreasing = T)
+ps_3 <- names(head(sorted_loading_3, 2000))
+union_ps <- union(ps_2, ps_3)
+loading_3[intersect_ps]
+loading_2[intersect_ps]
+
+subset_maqc <- scaled_maqc[union_ps,]
+sample_maqc <- scaled_maqc[,1]
+dim_maqc <- nrow(scaled_maqc)
+quantile_maqc <- 1:dim_maqc/dim_maqc
+
+View(subset_maqc)
+# Filter out probesets that are heavily loaded in PC2 and PC3
+filtered_scaled <- scaled_maqc[!(rownames(scaled_maqc) %in% union_ps),]
+plot_filtered <- plot_batch(filtered_scaled, batch_info, shape_info)
+plot_filtered
+
+scaled_maqc <- norm.mean_scaling(raw_maqc)
+plot_scaled <- plot_batch(scaled_maqc, batch_info, shape_info)
+plot_scaled
+
+
+# Local Batch Effects? ----------------------------------------------------
+# Correct batch 5 and 6
+batch_5_6 <- scaled_maqc[40:60]
+batch_info1 <- rep(1:2, each = 10)
+class_info1 <- rep(rep(LETTERS[1:2], each = 5), 2)
+
+# factor_batch <- as.factor(batch_info1)
+# factor_class <- as.factor(class_info1)
+# # Metadata dataframe
+# metadata_df <- data.frame(factor_batch, factor_class)
+# head(metadata_df)
+# 
+# levels(factor_class)
+# 
+# # Returns vector of batches for each class
+# get_batch <- function(class) metadata_df[metadata_df$factor_class == class, "factor_batch"]
+# class_batch_info <- lapply(levels(factor_class), get_batch)
+# names(class_batch_info) <- levels(factor_class)
+
+# Correct batch 5 and 6
+batch_5_6 <- scaled_maqc[40:60]
+batch_info1 <- rep(1:2, each = 10)
+class_info1 <- rep(rep(LETTERS[1:2], each = 5), 2)
+
+batch_5_A <- scaled_maqc[41:45]
+batch_5_B <- scaled_maqc[46:50]
+batch_6_A <- scaled_maqc[51:55]
+batch_6_B <- scaled_maqc[56:60]
+# Two correction vectors: Class A & B
+# Anchor: Batch 5
+correction_A <- rowMeans(batch_6_A) - rowMeans(batch_5_A) 
+correction_B <- rowMeans(batch_6_B) - rowMeans(batch_5_B)
+# Correction performed
+corrected_6_A <- batch_6_A - correction_A
+corrected_6_B <- batch_6_B - correction_B
+# Change negative values to 0
+corrected_6_A[corrected_6_A < 0] <- 0
+corrected_6_B[corrected_6_B < 0] <- 0
+
+corrected_maqc <- cbind(scaled_maqc[,1:50], corrected_6_A, corrected_6_B)
+
+plot_batch(corrected_maqc, batch_info, shape_info)
+
 # Visualise ---------------------------------------------------------------
 # No normalisation
 plot_before <- plot_batch(raw_maqc, batch_info, shape_info)
 plot_before
 ggsave("dump/plot_before.pdf", plot_before,
        width = 6, height = 6)
+
+selected_probesets <- filter_probesets(raw_maqc, 0.98)
+filtered_maqc <- raw_maqc[selected_probesets,]
+nrow(filtered_maqc)
+filtered_plot <- plot_batch(filtered_maqc, batch_info, shape_info)
+filtered_plot
+
 
 # Mean-scaling
 scaled_maqc <- norm_mean_scaling(raw_maqc)

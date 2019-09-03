@@ -83,7 +83,6 @@ calc_erm1 <- function(response_df, normal_df, leukemia_df = NA, flag = "replace"
   
   # Calculation of constant vector factor
   leukemia_normal <- normal_centroid - leukemia_centroid
-  l2_norm <- function(vec) sqrt(sum(vec^2))
   unit_leukemia_normal <- leukemia_normal/l2_norm(leukemia_normal)
   
   # Assume that patients from top rows match correspondingly with bottom rows
@@ -765,6 +764,114 @@ features_df1 <- calc_erm1(response_df, normal_df)
 features_df2 <- calc_erm2(response_df, normal_df)
 features_df3 <- calc_erm3(response_df, normal_df)
 
+# MANUAL ------------------------------------------------------------------
+yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
+scaled_yeoh <- norm.mean_scaling(yeoh_combined)
+# Filtering of probesets
+selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
+selected_yeoh <- scaled_yeoh[selected_probesets,]
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(scaled_yeoh), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:24, c(208,208,42,3))
+plot.pca_3d(selected_yeoh, batch_colour, timepoint_shape)
+plot.pca_3d(log2_transform(selected_yeoh), batch_colour, timepoint_shape)
+
+timepoint_info <- rep(c("D0","D8","Normal"), c(208,208,45))
+metadata_df <- data.frame(batch_info, timepoint_info)
+table(batch_info, timepoint_info)
+
+
+# arguments L1
+order_batch <- c(2,10,9,8,7,6,4,3,1,5)
+order_factor <- as.factor(order_batch)
+batch_info
+class_info <- timepoint_info
+df <- selected_yeoh
+
+# Convert batch_vec to factor
+batch_factor <- as.factor(batch_info)
+batch_levels <- levels(batch_factor)
+# Create metadata df
+metadata_df <- data.frame(batch_info, class_info)
+rownames(metadata_df) <- colnames(df)
+# Split df by batches
+list_batch_df <- lapply(batch_levels, function(batch_id) df[, batch_factor == batch_id])
+names(list_batch_df) <- batch_levels
+str(list_batch_df)
+
+batch_num1 <- order_factor[[1]]
+batch_num2 <- order_factor[[2]]
+
+# arguments L2
+# df1 is anchor df
+df2 <- list_batch_df[[batch_num1]]
+df1 <- list_batch_df[[batch_num2]]
+
+class_info1 <- metadata_df[colnames(df1), "class_info"]
+class_info2 <- metadata_df[colnames(df2), "class_info"]
+# Find classes that appear in both batches
+intersect_classes <- sort(intersect(class_info1, class_info2))
+
+# Create list of df split by class for both batches
+# Only intersect_classes appear in list_class_df1_subset
+list_class_df1_subset <- lapply(intersect_classes, function(class_id) df1[, class_info1 == class_id])
+names(list_class_df1_subset) <- intersect_classes
+# All classes in df2 is present in list
+# Sort to avoid error later on
+list_class_df2 <- lapply(sort(unique(class_info2)), function(class_id) df2[, class_info2 == class_id])
+names(list_class_df2) <- sort(unique(class_info2))
+# Calculate centroid for classes that appear in both batches for df1
+list_df1_centroid_subset <- lapply(list_class_df1_subset, rowMeans)
+# Calculate centroid for all classes for df2
+list_df2_centroid <- lapply(list_class_df2, rowMeans)
+list_df2_centroid_subset <- list_df2_centroid[intersect_classes]
+# Calculate correction vectors for each class
+# Anchor: df1, hence df2_centroid - df1_centroid (order matters!!!)
+correction_vectors <- data.frame(mapply(`-`, list_df2_centroid_subset, list_df1_centroid_subset))
+
+# Identify classes in df2 that are not present in df1
+extra_classes <- setdiff(unique(class_info2), intersect_classes)
+if(length(extra_classes) != 0) {
+  
+  # FUNCTION???
+  # Determine intersect class with nearest distance to extra class
+  class <- "Normal"
+  
+  # Logical vector selecting current class
+  class_logvec <- names(list_df2_centroid) == class
+  centroid_vec <- unlist(list_df2_centroid[class_logvec])
+  list_other_centroids <- list_df2_centroid[!class_logvec]
+  # Subtract vector from all centroids and apply l2 norm
+  
+  str(list_other_centroids)
+  
+  # Use correction vector of nearest class
+  # Create correction vector for class
+  # Append to correction_vectors
+  # Sort columns to match names(list_class_df2)
+}
+
+# Ensure that correction_vectors is ordered the same way as list_class_df2
+stopifnot(identical(names(list_class_df2), colnames(correction_vectors)))
+
+# Apply correction for each class in df2
+list_corrected_df2 <- unname(mapply(function(df,vec) df-vec, list_class_df2, correction_vectors))
+corrected_df2 <- do.call(cbind, list_corrected_df2)
+# Replace all negative values with 0
+corrected_df2[corrected_df2 < 0] <- 0
+# Order corrected_df2 by original column order
+corrected_df2 <- corrected_df2[,colnames(df2)]
+combined_df <- cbind(df1, corrected_df2)
+
+
+# Instead of using centroids...
+# Within the class, calculate a nearest neighbour for each sample (both ways)
 
 # ComBat ------------------------------------------------------------------
 yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)

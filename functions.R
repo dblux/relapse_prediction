@@ -3,11 +3,11 @@ library(dplyr)
 
 # Min-max scaling function
 # Returns: Scaled vector with range [0,1]
-norm_minmax <- function(vec) {(vec-min(vec))/(max(vec)-min(vec))}
+norm.minmax <- function(vec) {(vec-min(vec))/(max(vec)-min(vec))}
 
 # Trimmed mean scaling
 # Non-log values
-norm_mean_scaling <- function(df, target_mean = 500, trim_percentage = 0.02) {
+norm.mean_scaling <- function(df, target_mean = 500, trim_percentage = 0.02) {
   trimmed_mean <- apply(df, 2, mean, trim = trim_percentage)
   scaling_factor <- target_mean/trimmed_mean
   scaled_df <- as.data.frame(mapply(function(a,b) a*b, df, scaling_factor))
@@ -17,12 +17,12 @@ norm_mean_scaling <- function(df, target_mean = 500, trim_percentage = 0.02) {
 
 # Quantile normalisation: 0 values are assigned 0 automatically
 # Takes in df where columns are samples and rows are genes
-norm_quantile <- function(df) {
+norm.quantile <- function(df) {
   zero_filter <- df == 0
   sort_arr <- apply(df, 2, sort)
   # Creates reference distribution
   ref_distr <- apply(sort_arr, 1, mean)
-  rank_arr <- apply(df, 2, rank, ties.method = "first")
+  rank_arr <- apply(df, 2, rank, ties.method = "min")
   qnorm_arr <- apply(rank_arr, c(1,2), function(x) ref_distr[x])
   rownames(qnorm_arr) <- rownames(df)
   qnorm_df <- as.data.frame(qnorm_arr)
@@ -35,7 +35,7 @@ norm_quantile <- function(df) {
 # Gene Fuzzy Scoring function transforms gene expression values
 # Wilson Goh's paper
 # Dense rank is used
-norm_gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
+norm.gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
   # Bins score with range [0,1] into intervals
   # E.g. 4 Intervals: Binned into 0.2, 0.4, 0.6, 0.8
   bin <- function(score, num_intervals) {
@@ -96,7 +96,7 @@ norm_gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
   return (as.data.frame(ranked_A))
 }
 
-norm_cdf <- function(df) {
+norm.cdf <- function(df) {
   for (c in 1:ncol(df)) {
     notzero <- df[,c] != 0
     df[,c][notzero] <- rank(df[,c][notzero])
@@ -105,19 +105,28 @@ norm_cdf <- function(df) {
   return(df)
 }
 
-# plot.pca_3d <- function(df, colour_code) {
-#   pca_obj <- prcomp(t(df))
-#   pca_arr <- as.data.frame(pca_obj$x[,1:5])
-#   # RGL plot parameters
-#   rgl.open()
-#   rgl.bg(color="white")
-#   rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
-#   par3d(windowRect = c(50, 20, 500, 500))
-#   aspect3d(1,1,1)
-#   # Plot of MILE dataset
-#   with(pca_arr, plot3d(PC1, PC2, PC3, col = colour_code,
-#                        type = "p", size = 5))
-# }
+# Filter probes with too many zeros
+# Arguments: Df, percentage threshold of non-zero values
+# Returns logical vector selecting rows that meet threshold of non-zero values
+filter_probesets <- function(df, percent_threshold) {
+  logical_df <- df != 0
+  selected_logvec <- rowSums(logical_df) > percent_threshold * ncol(df)
+  return(selected_logvec)
+}
+
+plot.pca_3d <- function(df, colour_code) {
+  pca_obj <- prcomp(t(df))
+  pca_arr <- as.data.frame(pca_obj$x[,1:5])
+  # RGL plot parameters
+  rgl.open()
+  rgl.bg(color="white")
+  rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
+  par3d(windowRect = c(50, 20, 500, 500))
+  aspect3d(1,1,1)
+  # Plot of MILE dataset
+  with(pca_arr, plot3d(PC1, PC2, PC3, col = colour_code, pch = 17,
+                       type = "p", size = 5))
+}
 
 # Function that calculates the matrix of mean differences from the patient and control matrix
 # Arguments: a <- larger matrix, b <- smaller matrix
@@ -223,7 +232,10 @@ calc_ttest <- function(df, size_a, flag = "pvalue", is_paired = F) {
 
 # Arguments: 2 dataframes that are not log-transformed
 # Log-fold change (class1/class2)
-calc_logfc <- function(df1, df2, prior_value = 0.1, func = mean) {
+calc_logfc <- function(df1, df2, func = mean) {
+  # Minimum value of both df besides 0 chosen as prior value
+  prior_value <- min(c(df1[df1 != 0], df2[df2 != 0]))
+  print(paste("Prior value:", prior_value))
   vec1 <- apply(df1, 1, func)
   vec2 <- apply(df2, 1, func)
   # log2(0) = -Inf; log2(Inf) = -Inf; log2(0/0) = NaN
@@ -231,10 +243,11 @@ calc_logfc <- function(df1, df2, prior_value = 0.1, func = mean) {
   vec1[vec1 == 0] <- prior_value
   vec2[vec2 == 0] <- prior_value
   fc <- vec1/vec2
-  # Reassigns NaN (0/0) with 1
-  fc[is.nan(fc)] <- 1
   return(log2(fc))
 }
+
+# Calculates L2 norm of a vector
+l2_norm <- function(vec) sqrt(sum(vec^2))
 
 # Argument: Recorded plot
 # Save figure as file format indicated
@@ -338,7 +351,10 @@ log2_transform <- function(df) {
 }
 
 # Substring without n last characters
-substring_head <- function(string, n) substring(string, 1, nchar(string) - n)
+substring_head <- function(string, n) substring(string, 1, nchar(string)-n)
+
+# Substring tail starting from length - n characters
+substring_tail <- function(string, n) substring(string, nchar(string)-n+1)
 
 # Plot venn diagram
 jacc_coeff <- function(vec1, vec2) {
