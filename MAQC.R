@@ -4,7 +4,7 @@ library(cowplot)
 # library(scran)
 # library(sva)
 source("../functions.R")
-
+theme_set(theme_cowplot())
 # Assumes that dataframe has been log-transformed
 plot_batch <- function(df, batch_info, shape_info) {
   batch_factor <- factor(batch_info)
@@ -66,7 +66,6 @@ colnames(raw_maqc)
 batch_info <- rep(1:6, each = 10)
 shape_info <- rep(rep(1:2, each = 5), 6)
 
-
 # EXPLORE -----------------------------------------------------------------
 # No normalisation
 plot_before <- plot_batch(raw_maqc, batch_info, shape_info)
@@ -124,7 +123,7 @@ rank_2_B[little_change_B,]
 # Selection of probesets
 # Do not select probesets with high variance (Technical and biological variance)
 rank_diff_A <- rowMeans(rank_1_A) - rowMeans(rank_2_A)
-batch_1_A_sd[1:10]
+batch_1_A_sd[1:10] 
 batch_2_A_sd[1:10]
 mean(rank_diff)
 sd(rank_diff)
@@ -304,4 +303,11 @@ combat_maqc <- ComBat(data.matrix(filtered_maqc), maqc_metadata$batch_info, mode
 
 plot_combat <- plot_batch(data.frame(combat_maqc), batch_info, shape_info)
 ggsave("dump/plot_combat.pdf", plot_combat,
+       width = 6, height = 6)
+
+# CBC ---------------------------------------------------------------------
+class_info <- ifelse(shape_info == 1, "A", "B")
+cbc_maqc <- norm.CBC(raw_maqc, batch_info, class_info, 1:6)
+plot_cbc <- plot_batch(cbc_maqc, batch_info, class_info)
+ggsave("dump/plot_cbc.pdf", plot_cbc,
        width = 6, height = 6)
