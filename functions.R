@@ -343,6 +343,7 @@ evaluation_report <- function(predict_vec, label_vec) {
 }
 
 # Log2 transforms data and handles -Inf values
+# Same values will become negative after log2_transform
 log2_transform <- function(df) {
   log2_df <- log2(df)
   logical_df <- is.infinite(data.matrix(log2_df))

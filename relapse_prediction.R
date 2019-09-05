@@ -329,11 +329,10 @@ d33_label <- yeoh_label[substring(colnames(yeoh_d33), 1, 4), "label", drop = F]
 d33_remission <- rownames(d33_label)[d33_label == 0 & !is.na(d33_label)]
 yeoh_remission <- yeoh_d33[, paste0(d33_remission, "_D33")]
 
-mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
-                        sep = "\t", header = T, row.names = 1)
-mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
-                            sep = "\t", header = T, row.names = 1)
-
+# mile_data <- read.table("data/GSE13204/processed/mas5_ordered.tsv",
+#                         sep = "\t", header = T, row.names = 1)
+# mile_metadata <- read.table("data/GSE13204/processed/metadata.tsv",
+#                             sep = "\t", header = T, row.names = 1)
 
 # SCALE & FILTER ----------------------------------------------------------
 yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
@@ -867,22 +866,32 @@ norm.CBC <- function(df, batch_info, class_info, order_batch) {
 
 table(batch_info, timepoint_info)
 order_batch <- c(10,9,8,7,6,4,3,1,2,5)
-cbc_yeoh <- norm.CBC(selected_yeoh, batch_info, timepoint_info, order_batch)
-plot.pca_3d(mbs_yeoh, batch_colour, timepoint_shape)
-plot.pca_3d(log2_transform(cbc_yeoh), batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-cbc_all_nolog", "pdf")
 
-colnames(cbc_yeoh[,1:416])
+log_yeoh <- log2_transform(selected_yeoh)
+cbc_yeoh <- norm.CBC(log_yeoh, batch_info, timepoint_info, order_batch)
+plot.pca_3d(cbc_yeoh, batch_colour, timepoint_shape)
+# plot.pca_3d(log2_transform(cbc_yeoh), batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-cbc_log_all", "pdf")
+
+colnames(cbc_yeoh)
 # Selecting drug responsive genes between D0 and D8
 ttest_pvalue <- calc_ttest(cbc_yeoh[,1:416], 208, is_paired = T)
-log_fc <- calc_logfc(cbc_yeoh[,1:208], cbc_yeoh[,209:416])
+log_fc <- calc_logfc(2^cbc_yeoh[,1:208], 2^cbc_yeoh[,209:416])
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+# Selecting drug responsive genes between D0 and D33
+ttest_pvalue <- calc_ttest(cbind(cbc_yeoh[,1:208], cbc_yeoh[,417:461]),
+                           size_a = 208, is_paired = F)
+log_fc <- calc_logfc(2^cbc_yeoh[,1:208], 2^cbc_yeoh[,417:461])
 pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
 fc_probesets <- names(log_fc)[log_fc > 1]
 intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
 print(length(intersect_probesets))
 
 selected_cbc_yeoh <- cbc_yeoh[intersect_probesets,]
-log_cbc_yeoh <- log2_transform(cbc_yeoh[intersect_probesets,])
 
 # PCA
 pca_obj <- prcomp(t(selected_cbc_yeoh))
@@ -1003,7 +1012,7 @@ save_fig(dendogram, "dump/hclust-mnn_yeoh.pdf",
 # PCA PLOT ----------------------------------------------------------------
 # Plot PCA-3D
 plot.pca_3d(pca_coord, batch_colour, timepoint_shape, pc_labels)
-rgl.postscript("dump/pca_3d-cdc_select_log.pdf", "pdf")
+rgl.postscript("dump/pca_3d-cdc_log_select.pdf", "pdf")
 
 # Plot PCA-2D
 # plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
@@ -1022,14 +1031,14 @@ generate_greens <- colorRampPalette(c("greenyellow", "darkgreen"))
 subtype_palette <- generate_greens(8)
 subtype_colour <- subtype_palette[subtype_yeoh]
 
-# Legend [levels(subtype_yeoh)]
-plot(rep(0, 8), 1:8, pch = 19, cex = 2,
-     xlim = c(-0.3,0.7),
-     col = subtype_palette, axes = F, ann = F)
-text(rep(0.1, 8), 1:8, levels(subtype_yeoh), pos = 4)
-plot_legend <- recordPlot()
-save_fig(plot_legend, "dump/legend-subtype.pdf",
-         width = 4, height = 6)
+# # Legend [levels(subtype_yeoh)]
+# plot(rep(0, 8), 1:8, pch = 19, cex = 2,
+#      xlim = c(-0.3,0.7),
+#      col = subtype_palette, axes = F, ann = F)
+# text(rep(0.1, 8), 1:8, levels(subtype_yeoh), pos = 4)
+# plot_legend <- recordPlot()
+# save_fig(plot_legend, "dump/legend-subtype.pdf",
+#          width = 4, height = 6)
 
 # For vectors plot
 # patient_subtype <- as.numeric(subtype_yeoh)
@@ -1057,7 +1066,7 @@ vectors_plot <- plot_vectors(as.data.frame(arrows_arr),
                              patient_colour,
                              subtype_colour)
 vectors_plot
-ggsave("dump/vectors-quantile_timepoint_select_log.pdf", vectors_plot,
+ggsave("dump/vectors-cbc_log_select.pdf", vectors_plot,
        width = 12, height = 6)
 
 # # Subtype colours
@@ -1098,7 +1107,7 @@ labels_yeoh <- yeoh_label[row_index, 5:6]
 results_df <- cbind(features_df, labels_yeoh)
 rownames(results_df) <- row_index
 # results_df[order(results_df$erm),]
-write.table(results_df, "dump/results-quantile_baseline_log_all.tsv",
+write.table(results_df, "dump/results-cbc_log_all.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 # Plot ROC
@@ -1121,7 +1130,7 @@ plot_roc(results_df[,1:6], labels_vec,
          name_vec = line_labels)
 
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/roc-quantile_baseline_pca_all_log.pdf",
+save_fig(results_roc, "dump/roc-cbc_log.pdf",
          width = 9, height = 9)
 
 # yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
@@ -1131,6 +1140,8 @@ save_fig(results_roc, "dump/roc-quantile_baseline_pca_all_log.pdf",
 #   print(results_list[[i]])
 #   print(results_list2[[i]])
 # }
+
+# Subtype analysis
 head(results_df)
 head(yeoh_label)
 analysis_df <- cbind(results_df[,c(1,7)],
