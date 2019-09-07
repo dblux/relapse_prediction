@@ -101,38 +101,24 @@ plot_gfs <- plot_batch(gfs_maqc, batch_info, shape_info)
 ggsave("dump/plot_gfs.pdf", plot_gfs,
        width = 6, height = 6)
 
-# MNN
-raw_arr <- data.matrix(raw_maqc)
-# Ordered according to number of samples in batch
-mnn_maqc_obj <- mnnCorrect(raw_arr[,1:10],
-                           raw_arr[,11:20],
-                           raw_arr[,21:30],
-                           raw_arr[,31:40],
-                           raw_arr[,41:50],
-                           raw_arr[,51:60])
-                           
-mnn_maqc <- do.call(cbind, mnn_maqc_obj$corrected)
-# Column names for matrix arranged in above order
-colnames(mnn_maqc) <- colnames(raw_arr)
-plot_mnn <- plot_batch(data.frame(mnn_maqc), batch_info, shape_info)
-ggsave("dump/plot_mnn.pdf", plot_mnn,
-       width = 6, height = 6)
-
 # MNN - Scaled
-scaled_arr <- data.matrix(norm.mean_scaling(raw_maqc))
+scaled_arr <- data.matrix(log_maqc)
 # Ordered according to number of samples in batch
 mnn_maqc_obj <- mnnCorrect(scaled_arr[,1:10],
                            scaled_arr[,11:20],
                            scaled_arr[,21:30],
                            scaled_arr[,31:40],
                            scaled_arr[,41:50],
-                           scaled_arr[,51:60])
+                           scaled_arr[,51:60],
+                           k = 5)
 
 mnn_maqc <- do.call(cbind, mnn_maqc_obj$corrected)
 # Column names for matrix arranged in above order
-colnames(mnn_maqc) <- colnames(raw_arr)
-plot_mnn_scaled <- plot_batch(data.frame(mnn_maqc), batch_info, shape_info)
-ggsave("dump/plot_mnn_scaled.pdf", plot_mnn_scaled,
+colnames(mnn_maqc) <- colnames(log_maqc)
+plot_mnn_log_scaled <- plot_batch(data.frame(mnn_maqc), batch_info, class_info)
+plot_mnn_log_scaled
+
+ggsave("dump/plot_mnn_log_scaled.pdf", plot_mnn_log_scaled,
        width = 6, height = 6)
 
 # Quantile normalisation
@@ -255,7 +241,7 @@ ggsave("dump/plot_cbc_log_scaled.pdf", plot_cbc_log_scaled,
 ggsave("dump/plot_log_cbc_log_scaled.pdf", plot_log_cbc_log_scaled,
        width = 6, height = 6)
 
-# Proportion Study --------------------------------------------------------
+# PROPORTION DATASET --------------------------------------------------------
 # Selects samples such that each batch has a diff proportion of classes
 # Proportions rep(rep(LETTERS[1:2], 6), c(5,5,4,5,5,4,3,5,5,3,3,4))
 selection_index <- c(1:10,11:14,16:20,21:25,26:29,31:33,36:40,41:45,46:48,51:53,56:59)
@@ -307,18 +293,19 @@ ggsave("dump/plot_cbc_log_scaled_odd.pdf", plot_cbc,
        width = 6, height = 6)
 
 # Harman
-harman_obj <- harman(log_maqc, odd_class_info, odd_batch_info, limit = 0.95)
+harman_obj <- harman(odd_log_maqc, odd_class_info, odd_batch_info, limit = 0.95)
 harman_maqc <- data.frame(reconstructData(harman_obj))
 
 plot_harman_odd <- plot_batch(harman_maqc, odd_batch_info, odd_class_info)
 plot_harman_odd
-ggsave("dump/plot_harman_odd.pdf", plot_harman,
+ggsave("dump/plot_harman_odd.pdf", plot_harman_odd,
        width = 6, height = 6)
 
 # Scanorama
 # Write log_maqc for numpy array
 write.table(odd_log_maqc, "data/scanorama/odd_log_maqc.tsv",
             quote = F, sep = "\t", row.names = F, col.names = F)
+# Read scanorama corrected data
 scanorama_maqc_odd <- read.table("data/scanorama/scanorama_data_odd.tsv",
                                  sep = "\t", row.names = 1)
 colnames(scanorama_maqc_odd) <- colnames(odd_log_maqc)
@@ -326,6 +313,91 @@ plot_scanorama_odd <- plot_batch(scanorama_maqc_odd,
                                  odd_batch_info, odd_class_info)
 plot_scanorama_odd
 ggsave("dump/plot_scanorama_odd.pdf", plot_scanorama_odd,
+       width = 6, height = 6)
+
+# SMALL DATASET -----------------------------------------------------------
+small_index <- 1:3 + rep(seq(0,55,5), each = 3)
+small_maqc <- raw_maqc[,small_index]
+small_batch_info <- rep(1:6, each = 6)
+small_class_info <- substring(colnames(small_maqc), 7, 7)
+# Scale and log-transform odd_maqc
+small_scaled_maqc <- norm.mean_scaling(small_maqc)
+small_log_maqc <- log2_transform(small_scaled_maqc)
+
+# Scanorama
+# Write small_log_maqc for numpy array
+write.table(small_log_maqc, "data/scanorama/small_log_maqc.tsv",
+            quote = F, sep = "\t", row.names = F, col.names = F)
+# Read scanorama corrected data
+scanorama_maqc_small <- read.table("data/scanorama/scanorama_data_small.tsv",
+                                   sep = "\t", row.names = 1)
+colnames(scanorama_maqc_small) <- colnames(small_log_maqc)
+plot_scanorama_small <- plot_batch(scanorama_maqc_small,
+                                   small_batch_info, small_class_info)
+plot_scanorama_small
+ggsave("dump/plot_scanorama_small.pdf", plot_scanorama_small,
+       width = 6, height = 6)
+
+# ComBat
+# Creation of pData dataframe (metadata)
+class <- as.factor(small_class_info)
+batch <- as.factor(small_batch_info)
+maqc_metadata <- data.frame(class, batch)
+# Rownames of metadata are same as colnames of data df
+rownames(maqc_metadata) <- colnames(small_maqc)
+head(maqc_metadata, 20)
+
+# ComBat assumes that data has been normalised and probesets have been filtered
+# Error if probesets are not filtered as rows have 0 variance
+selected_probetsets <- filter_probesets(small_log_maqc, 0.1)
+filtered_maqc <- small_log_maqc[selected_probetsets,]
+# Place adjustment/confounding variables in model.matrix (e.g. age)
+# Do not put batch variables in model.matrix
+# Put batch variables directly in combat function
+model_combat <- model.matrix(~1, data = maqc_metadata)
+combat_maqc <- ComBat(data.matrix(filtered_maqc),
+                      batch = maqc_metadata$batch,
+                      mod = model_combat)
+combat_maqc_df <- data.frame(combat_maqc)
+# Replace negative values with 0
+combat_maqc_df[combat_maqc_df < 0] <- 0
+
+plot_combat_log_scaled_small <- plot_batch(combat_maqc_df, small_batch_info, small_class_info)
+plot_combat_log_scaled_small
+
+ggsave("dump/plot_combat_log_scaled_small.pdf", plot_combat_log_scaled_small,
+       width = 6, height = 6)
+
+# CBC
+cbc_maqc_small <- norm.CBC(small_log_maqc, small_batch_info, small_class_info, 1:6)
+plot_cbc_log_scaled_small <- plot_batch(cbc_maqc_small, small_batch_info, small_class_info)
+plot_cbc_log_scaled_small
+ggsave("dump/plot_cbc_log_scaled_small.pdf", plot_cbc_log_scaled_small,
+       width = 6, height = 6)
+
+# MNN - Scaled
+small_log_arr <- data.matrix(small_log_maqc)
+list_small_df <- split.default(small_log_maqc, rep(1:6, each = 6))
+list_small_arr <- lapply(list_small_df, data.matrix)
+list_args <- c(list_small_arr, k = 3)
+mnn_maqc_obj <- do.call(mnnCorrect, list_args)
+
+# # Ordered according to number of samples in batch
+# mnn_maqc_obj <- mnnCorrect(scaled_arr[,1:10],
+#                            scaled_arr[,11:20],
+#                            scaled_arr[,21:30],
+#                            scaled_arr[,31:40],
+#                            scaled_arr[,41:50],
+#                            scaled_arr[,51:60],
+#                            k = 5)
+
+mnn_maqc <- do.call(cbind, mnn_maqc_obj$corrected)
+# Column names for matrix arranged in above order
+colnames(mnn_maqc) <- colnames(small_log_maqc)
+plot_mnn_log_scaled_small <- plot_batch(data.frame(small_log_maqc), small_batch_info, small_class_info)
+plot_mnn_log_scaled_small
+
+ggsave("dump/plot_mnn_log_scaled_k3.pdf", plot_mnn_log_scaled_small,
        width = 6, height = 6)
 
 # EXPLORE -----------------------------------------------------------------
@@ -391,7 +463,6 @@ mean(rank_diff)
 sd(rank_diff)
 hist(rnorm(20000,0,1688), breaks = 80, col = "lightblue")
 hist(rank_diff, breaks = 80, col = "tomato")
-
 
 # PCA loadings ------------------------------------------------------------
 col_logical <- apply(t(df), 2, var) != 0
@@ -479,6 +550,7 @@ corrected_6_B[corrected_6_B < 0] <- 0
 corrected_maqc <- cbind(scaled_maqc[,1:50], corrected_6_A, corrected_6_B)
 
 plot_batch(corrected_maqc, batch_info, shape_info)
+
 
 
 # Scanorama ---------------------------------------------------------------
