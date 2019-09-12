@@ -83,7 +83,6 @@ nrow(filtered_maqc)
 filtered_plot <- plot_batch(filtered_maqc, batch_info, shape_info)
 filtered_plot
 
-
 # Mean-scaling
 scaled_maqc <- norm_mean_scaling(raw_maqc)
 plot_scaled <- plot_batch(scaled_maqc, batch_info, shape_info)
@@ -306,13 +305,27 @@ ggsave("dump/plot_harman_odd.pdf", plot_harman_odd,
 write.table(odd_log_maqc, "data/scanorama/odd_log_maqc.tsv",
             quote = F, sep = "\t", row.names = F, col.names = F)
 # Read scanorama corrected data
-scanorama_maqc_odd <- read.table("data/scanorama/scanorama_data_odd.tsv",
+scanorama_maqc_odd <- read.table("data/scanorama/scanorama_data_odd_k5.tsv",
                                  sep = "\t", row.names = 1)
-colnames(scanorama_maqc_odd) <- colnames(odd_log_maqc)
+colnames(scanorama_maqc_odd) <- colnames(odd_maqc)
 plot_scanorama_odd <- plot_batch(scanorama_maqc_odd,
                                  odd_batch_info, odd_class_info)
 plot_scanorama_odd
-ggsave("dump/plot_scanorama_odd.pdf", plot_scanorama_odd,
+ggsave("dump/plot_scanorama_odd_k5.pdf", plot_scanorama_odd,
+       width = 6, height = 6)
+
+# MNN
+list_small_df <- split.default(odd_log_maqc, odd_batch_info)
+list_small_arr <- lapply(list_small_df, data.matrix)
+list_args <- c(list_small_arr, k = 3)
+mnn_maqc_obj <- do.call(mnnCorrect, list_args)
+
+mnn_maqc_odd <- do.call(cbind, mnn_maqc_obj$corrected)
+# Column names for matrix arranged in above order
+colnames(mnn_maqc) <- colnames(odd_log_maqc)
+plot_mnn_odd_k3 <- plot_batch(data.frame(mnn_maqc_odd),
+                              odd_batch_info, odd_class_info)
+ggsave("dump/plot_mnn_odd_k3.pdf", plot_mnn_odd_k3,
        width = 6, height = 6)
 
 # SMALL DATASET -----------------------------------------------------------
@@ -329,13 +342,13 @@ small_log_maqc <- log2_transform(small_scaled_maqc)
 write.table(small_log_maqc, "data/scanorama/small_log_maqc.tsv",
             quote = F, sep = "\t", row.names = F, col.names = F)
 # Read scanorama corrected data
-scanorama_maqc_small <- read.table("data/scanorama/scanorama_data_small.tsv",
+scanorama_maqc_small <- read.table("data/scanorama/scanorama_data_small_k15.tsv",
                                    sep = "\t", row.names = 1)
 colnames(scanorama_maqc_small) <- colnames(small_log_maqc)
 plot_scanorama_small <- plot_batch(scanorama_maqc_small,
                                    small_batch_info, small_class_info)
 plot_scanorama_small
-ggsave("dump/plot_scanorama_small.pdf", plot_scanorama_small,
+ggsave("dump/plot_scanorama_small_k15.pdf", plot_scanorama_small,
        width = 6, height = 6)
 
 # ComBat
