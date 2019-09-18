@@ -315,7 +315,7 @@ yeoh_normal <- read.table("data/leuk_normal/processed/mas5_filtered.tsv",
                           sep = "\t", header = T, row.names = 1)
 yeoh_batch <- read.table("data/GSE67684/processed/metadata_combined-batch.tsv",
                          sep = "\t", header = T, row.names = 1)
-yeoh_label <- read.table("data/GSE67684/processed/metadata_combined-label_subtype.tsv",
+yeoh_label <- read.table("data/GSE67684/processed/metadata_combined-label_subtype_edited.tsv",
                          sep = "\t", header = T, row.names = 1)
 
 # Removal of outlier samples and their associated pairs
@@ -341,6 +341,8 @@ scaled_yeoh <- norm.mean_scaling(yeoh_combined)
 # Filtering of probesets
 selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
 selected_yeoh <- scaled_yeoh[selected_probesets,]
+# Log2_transform
+log_yeoh <- log2_transform(selected_yeoh)
 
 # VISUALISATION -----------------------------------------------------------
 yeoh_combined <- cbind(yeoh_d0d8, yeoh_d33, yeoh_normal)
@@ -413,14 +415,23 @@ rgl.postscript("dump/pca_3d-quantile_new.pdf", "pdf")
 # quantile_d33 <- quantile_yeoh[,417:458]
 # quantile_normal <- quantile_yeoh[,459:461]
 
+# # Quantile by timepoint
+# quantile_d0 <- norm.quantile(log_yeoh[, 1:208])
+# quantile_d8 <- norm.quantile(log_yeoh[, 209:416])
+# quantile_d33 <- norm.quantile(log_yeoh[, 417:458])
+# quantile_normal <- norm.quantile(log_yeoh[, 459:461])
+# quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33, quantile_normal)
+# colnames(log_yeoh)[459:461]
+# dim(log_yeoh)
+
 # Quantile by timepoint
-quantile_d0 <- norm.quantile(scaled_yeoh[selected_probesets, 1:208])
-quantile_d8 <- norm.quantile(scaled_yeoh[selected_probesets, 209:416])
-quantile_d33 <- norm.quantile(scaled_yeoh[selected_probesets, 417:458])
-quantile_normal <- norm.quantile(scaled_yeoh[selected_probesets, 459:461])
+quantile_d0 <- norm.quantile(selected_yeoh[, 1:208])
+quantile_d8 <- norm.quantile(selected_yeoh[, 209:416])
+quantile_d33 <- norm.quantile(selected_yeoh[, 417:458])
+quantile_normal <- norm.quantile(selected_yeoh[, 459:461])
 quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33, quantile_normal)
-colnames(scaled_yeoh)[459:461]
-dim(scaled_yeoh)
+colnames(selected_yeoh)[459:461]
+dim(selected_yeoh)
 
 # Plot PCA before selecting features
 # Batch information of all the timepoints
@@ -431,7 +442,7 @@ batch_colour <- batch_palette[batch_info]
 # Shape of all timepoints
 timepoint_shape <- rep(21:24, c(208,208,42,3))
 plot.pca_3d(quantile_yeoh, batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-quantile_timepoint_all_feature.pdf", "pdf")
+rgl.postscript("dump/pca_3d-quantile_timepoint_log_all_feature.pdf", "pdf")
 
 # Selecting drug responsive genes between D0 and D8
 ttest_pvalue <- calc_ttest(cbind(quantile_d0, quantile_d8), 208, is_paired = T)
@@ -1002,7 +1013,7 @@ labels_yeoh <- yeoh_label[row_index, 5:6]
 results_df <- cbind(features_df, labels_yeoh)
 rownames(results_df) <- row_index
 # results_df[order(results_df$erm),]
-write.table(results_df, "dump/results-cbc_log_all.tsv",
+write.table(results_df, "dump/results-quantile_timepoint_log_allsamples.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 # Plot ROC
@@ -1016,7 +1027,6 @@ write.table(results_df, "dump/results-cbc_log_all.tsv",
 head(results_df)
 labels_vec <- results_df[, 7]
 labels_vec
-
 par(mar = rep(5,4))
 line_labels <- c("ERM1", "ERM1-Ratio",
                  "ERM2", "ERM2-Ratio",
@@ -1025,16 +1035,25 @@ plot_roc(results_df[,1:6], labels_vec,
          name_vec = line_labels)
 
 results_roc <- recordPlot()
-save_fig(results_roc, "dump/roc-cbc_log.pdf",
+save_fig(results_roc, "dump/roc-quantile_timepoint_log_allsamples.pdf",
          width = 9, height = 9)
 
-# yeoh_metadata <- read.table("data/GSE67684/processed/metadata_batch.tsv",
-#                             sep = "\t", header = T, row.names = 1)
-# results_list2 <- split(results_df2, results_df2[,2])
-# for (i in 1:length(results_list)) {
-#   print(results_list[[i]])
-#   print(results_list2[[i]])
-# }
+# Visualise all except subtype: Others
+head(filtered_subtype_results)
+labels_vec <- results_df[, 7]
+labels_vec
+par(mar = rep(5,4))
+line_labels <- c("ERM1", "ERM1-Ratio",
+                 "ERM2", "ERM2-Ratio",
+                 "PC1", "PC1-Ratio", "MRD33")
+plot_roc(filtered_subtype_results[,c(1:6,9)], filtered_subtype_results[,7],
+         name_vec = line_labels, is_bigger_better_vec = c(rep(F,6),T))
+
+results_roc <- recordPlot()
+save_fig(results_roc, "dump/roc-quantile_timepoint_no_others.pdf",
+         width = 9, height = 9)
+
+View(filtered_subtype_results)
 
 # Subtype analysis
 head(results_df)
@@ -1051,6 +1070,22 @@ plot_subtype <- ggplot(analysis_df) +
 plot_subtype
 ggsave("dump/subtype_analysis.pdf", plot_subtype,
        width = 8, height = 5)
+
+# Join results_df and yeoh_label
+merged_results <- merge(results_df, yeoh_label[,c(1,7)], by = "row.names")
+merged_results <- merged_results[,-c(1)]
+# Filter out MRD33 missing values
+filtered_results<- merged_results[!is.na(merged_results$d33_mrd),]
+# Convert to numeric
+filtered_results$d33_mrd <- as.numeric(as.character(filtered_results$d33_mrd))
+# Change NA values (<0.0001) to 5e-5
+filtered_results$d33_mrd[is.na(filtered_results$d33_mrd)] <- 5e-5
+# Filter out subtype: Others
+filtered_subtype_results <- filtered_results[filtered_results$subtype != "Others",]
+
+write.table(filtered_subtype_results, "dump/results_quantile_timepoint_mrd33_no_others.tsv",
+            quote = F, sep = "\t")
+
 
 # MILE: Normal samples ----------------------------------------------------
 # PCA

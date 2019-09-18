@@ -1,7 +1,7 @@
 # Arguments: combined df, batch, class and order info
 # Order info: Left most is anchor data (Recursively corrected)
 # Returns: Combined df of corrected data
-norm.CBC <- function(df, batch_info, class_info, order_batch) {
+norm.CBC <- function(df, batch_info, class_info, order_batch, correction_wpath = "dump/correction_vectors.tsv") {
   # Arguments: df1 is anchor batch, df2 is second batch
   # Returns: Combined df of df2 mapped to df1
   pairwise_correction <- function(df1, df2) {
@@ -65,6 +65,8 @@ norm.CBC <- function(df, batch_info, class_info, order_batch) {
       correction_vectors <- all_correction_df[,sort(colnames(all_correction_df))]
     }
     # TODO: PRINT CORRECTION VECTORS
+    write.table(correction_vectors, correction_wpath,
+                quote = F, sep = "\t")
     # Ensure that correction_vectors is ordered the same way as list_class_df2
     stopifnot(identical(names(list_class_df2), colnames(correction_vectors)))
     # Apply correction for each class in df2 (list_class_df2)
@@ -104,4 +106,5 @@ norm.CBC <- function(df, batch_info, class_info, order_batch) {
   # Within the class, calculate a nearest neighbour for each sample (both ways)
   
   # TODO: How to determine the order!!!
+  # ERROR IF A BATCH HAS ONLY ONE CLASS I THINK!!!
 }

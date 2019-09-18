@@ -1,9 +1,9 @@
 library(reshape2)
 library(ggplot2)
 library(cowplot)
-library(scran)
+# library(scran)
 library(sva)
-library(Harman)
+# library(Harman)
 source("../functions.R")
 source("class_batch_correction.R")
 theme_set(theme_cowplot())
@@ -17,7 +17,7 @@ plot_batch <- function(df, batch_info, shape_info) {
   # Mean probe intensities for each chip
   mean_tibble <- melt_df %>% group_by(ID) %>%
     summarise(mean = mean(value))
-  mean_jitter <- ggplot(mean_tibble, aes(x = ID,
+  mean_scatter <- ggplot(mean_tibble, aes(x = ID,
                                          y = mean,
                                          col = batch_factor,
                                          shape = shape_factor)) +
@@ -42,7 +42,7 @@ plot_batch <- function(df, batch_info, shape_info) {
     xlab(pc_labels[3]) + ylab(pc_labels[4])
   # Plot all graphs
   pca <- plot_grid(pc1_pc2, pc3_pc4)
-  multiplot <- plot_grid(mean_jitter, pca, nrow = 2)
+  multiplot <- plot_grid(mean_scatter, pca, nrow = 2)
   return(multiplot)
 }
 
@@ -100,25 +100,23 @@ plot_gfs <- plot_batch(gfs_maqc, batch_info, shape_info)
 ggsave("dump/plot_gfs.pdf", plot_gfs,
        width = 6, height = 6)
 
-# MNN - Scaled
-scaled_arr <- data.matrix(log_maqc)
-# Ordered according to number of samples in batch
-mnn_maqc_obj <- mnnCorrect(scaled_arr[,1:10],
-                           scaled_arr[,11:20],
-                           scaled_arr[,21:30],
-                           scaled_arr[,31:40],
-                           scaled_arr[,41:50],
-                           scaled_arr[,51:60],
-                           k = 5)
-
-mnn_maqc <- do.call(cbind, mnn_maqc_obj$corrected)
+# MNN
+# Split dataframe according to batch info
+list_df <- split.default(raw_maqc, batch_info)
+# Convert df to arr
+list_arr <- lapply(list_df, data.matrix)
+list_args <- c(list_arr, k = 5, cos.norm.out = F)
+mnn_maqc_obj <- do.call(mnnCorrect, list_args)
+mnn_maqc_arr <- do.call(cbind, mnn_maqc_obj$corrected)
 # Column names for matrix arranged in above order
-colnames(mnn_maqc) <- colnames(log_maqc)
-plot_mnn_log_scaled <- plot_batch(data.frame(mnn_maqc), batch_info, class_info)
-plot_mnn_log_scaled
-
-ggsave("dump/plot_mnn_log_scaled.pdf", plot_mnn_log_scaled,
+colnames(mnn_maqc_arr) <- colnames(log_maqc)
+plot_mnn <- plot_batch(data.frame(mnn_maqc_arr), batch_info, class_info)
+plot_mnn
+ggsave("dump/plot_mnn_log_scaled_k5.pdf", plot_mnn_log_scaled,
        width = 6, height = 6)
+
+# Investigate MNNs ability to correct for multiplicative error
+
 
 # Quantile normalisation
 col_indx <- substring(colnames(raw_maqc), 7, 7) == "A"
@@ -137,10 +135,11 @@ ggsave("dump/plot_qnorm.pdf", plot_qnorm,
 scaled_maqc <- norm.mean_scaling(raw_maqc)
 log_maqc <- log2_transform(scaled_maqc)
 
-harman_obj <- harman(log_maqc, shape_info, batch_info)
+harman_obj <- harman(scaled_maqc, class_info, batch_info)
 harman_maqc <- data.frame(reconstructData(harman_obj))
 
-plot_harman <- plot_batch(harman_maqc, batch_info, shape_info)
+plot_harman <- plot_batch(harman_maqc, batch_info, class_info)
+plot_harman
 ggsave("dump/plot_harman.pdf", plot_harman,
        width = 6, height = 6)
 
@@ -150,11 +149,12 @@ write.table(log_maqc, "data/scanorama/log_maqc.tsv",
             quote = F, sep = "\t", row.names = F, col.names = F)
 write(rownames(log_maqc), file = "data/scanorama/probeset_names.txt")
 
-scanorama_maqc <- read.table("data/scanorama/scanorama_data.tsv",
+scanorama_maqc <- read.table("data/scanorama/scanorama_data_k10.tsv",
                              sep = "\t", row.names = 1)
 colnames(scanorama_maqc) <- colnames(log_maqc)
 plot_scanorama <- plot_batch(scanorama_maqc, batch_info, class_info)
-ggsave("dump/plot_scanorama.pdf", plot_scanorama,
+plot_scanorama
+ggsave("dump/plot_scanorama_k10.pdf", plot_scanorama,
        width = 6, height = 6)
 
 # ComBat ------------------------------------------------------------------
@@ -168,14 +168,16 @@ maqc_metadata
 
 # ComBat assumes that data has been normalised and probesets have been filtered
 # Error if probesets are not filtered as rows have 0 variance
-scaled_maqc <- norm.mean_scaling(raw_maqc)
-selected_probetsets <- filter_probesets(scaled_maqc, 0.1)
-filtered_maqc <- scaled_maqc[selected_probetsets,]
+selected_probetsets <- filter_probesets(log_maqc, 0.1)
+filtered_maqc <- log_maqc[selected_probetsets,]
 
 # Place adjustment/confounding variables in model.matrix (e.g. age)
 # Do not put batch variables in model.matrix
 # Put batch variables directly in combat function
 model_combat <- model.matrix(~1, data = maqc_metadata)
+# # Include biological variable of interest as covariate
+# model_combat <- model.matrix(~class, data = maqc_metadata)
+
 combat_maqc <- ComBat(data.matrix(filtered_maqc),
                       batch = maqc_metadata$batch,
                       mod = model_combat)
@@ -183,7 +185,7 @@ combat_maqc_df <- data.frame(combat_maqc)
 # Replace negative values with 0
 combat_maqc_df[combat_maqc_df < 0] <- 0
 
-plot_combat_scaled <- plot_batch(combat_maqc_df, batch_info, shape_info)
+plot_combat_scaled <- plot_batch(combat_maqc_df, batch_info, class_info)
 plot_combat_scaled
 
 plot_log_combat_scaled <- plot_batch(log2_transform(combat_maqc_df), batch_info, shape_info)
@@ -255,23 +257,26 @@ odd_log_maqc <- log2_transform(odd_scaled_maqc)
 # Creation of pData dataframe (metadata)
 class <- as.factor(odd_class_info)
 batch <- as.factor(odd_batch_info)
-maqc_metadata <- data.frame(class, batch)
+odd_maqc_metadata <- data.frame(class, batch)
 # Rownames of metadata are same as colnames of data df
-rownames(maqc_metadata) <- colnames(odd_maqc)
-head(maqc_metadata, 20)
+rownames(odd_maqc_metadata) <- colnames(odd_maqc)
+head(odd_maqc_metadata, 20)
 
 # ComBat assumes that data has been normalised and probesets have been filtered
 # Error if probesets are not filtered as rows have 0 variance
-scaled_maqc <- norm.mean_scaling(odd_maqc)
-selected_probetsets <- filter_probesets(scaled_maqc, 0.1)
-filtered_maqc <- scaled_maqc[selected_probetsets,]
-log_maqc <- log2_transform(filtered_maqc)
+selected_probesets <- filter_probesets(odd_log_maqc, 0.1)
+odd_filtered_maqc <- odd_log_maqc[selected_probesets,]
 # Place adjustment/confounding variables in model.matrix (e.g. age)
 # Do not put batch variables in model.matrix
 # Put batch variables directly in combat function
-model_combat <- model.matrix(~1, data = maqc_metadata)
-combat_maqc <- ComBat(data.matrix(log_maqc),
-                      batch = maqc_metadata$batch,
+# # Only include intercept term in design matrix
+# model_combat <- model.matrix(~1, data = maqc_metadata)
+# Include biological variable of interest as covariate
+model_combat <- model.matrix(~class, data = odd_maqc_metadata)
+
+
+combat_maqc <- ComBat(data.matrix(odd_filtered_maqc),
+                      batch = odd_maqc_metadata$batch,
                       mod = model_combat)
 combat_maqc_df <- data.frame(combat_maqc)
 # Replace negative values with 0
@@ -317,15 +322,18 @@ ggsave("dump/plot_scanorama_odd_k5.pdf", plot_scanorama_odd,
 # MNN
 list_small_df <- split.default(odd_log_maqc, odd_batch_info)
 list_small_arr <- lapply(list_small_df, data.matrix)
+
 list_args <- c(list_small_arr, k = 3)
 mnn_maqc_obj <- do.call(mnnCorrect, list_args)
 
 mnn_maqc_odd <- do.call(cbind, mnn_maqc_obj$corrected)
 # Column names for matrix arranged in above order
-colnames(mnn_maqc) <- colnames(odd_log_maqc)
-plot_mnn_odd_k3 <- plot_batch(data.frame(mnn_maqc_odd),
+colnames(mnn_maqc_odd) <- colnames(odd_log_maqc)
+plot_mnn_odd_k5 <- plot_batch(data.frame(mnn_maqc_odd),
                               odd_batch_info, odd_class_info)
-ggsave("dump/plot_mnn_odd_k3.pdf", plot_mnn_odd_k3,
+plot_mnn_odd_k5
+
+ggsave("dump/plot_mnn_odd_k5.pdf", plot_mnn_odd_k5,
        width = 6, height = 6)
 
 # SMALL DATASET -----------------------------------------------------------
@@ -392,7 +400,7 @@ ggsave("dump/plot_cbc_log_scaled_small.pdf", plot_cbc_log_scaled_small,
 small_log_arr <- data.matrix(small_log_maqc)
 list_small_df <- split.default(small_log_maqc, rep(1:6, each = 6))
 list_small_arr <- lapply(list_small_df, data.matrix)
-list_args <- c(list_small_arr, k = 3)
+list_args <- c(list_small_arr, k = 3, cos.norm.out = T)
 mnn_maqc_obj <- do.call(mnnCorrect, list_args)
 
 # # Ordered according to number of samples in batch
@@ -407,11 +415,24 @@ mnn_maqc_obj <- do.call(mnnCorrect, list_args)
 mnn_maqc <- do.call(cbind, mnn_maqc_obj$corrected)
 # Column names for matrix arranged in above order
 colnames(mnn_maqc) <- colnames(small_log_maqc)
-plot_mnn_log_scaled_small <- plot_batch(data.frame(small_log_maqc), small_batch_info, small_class_info)
+
+# Replace negative values with zeros
+plot_mnn_log_scaled_small <- plot_batch(data.frame(mnn_maqc), small_batch_info, small_class_info)
 plot_mnn_log_scaled_small
 
-ggsave("dump/plot_mnn_log_scaled_k3.pdf", plot_mnn_log_scaled_small,
+ggsave("dump/plot_mnn_log_scaled_small_k3.pdf", plot_mnn_log_scaled_small,
        width = 6, height = 6)
+
+# Harman
+harman_obj <- harman(small_log_maqc, small_class_info,
+                     small_batch_info, limit = 0.95)
+harman_maqc <- data.frame(reconstructData(harman_obj))
+
+plot_harman_small <- plot_batch(harman_maqc, small_batch_info, small_class_info)
+plot_harman_small
+ggsave("dump/plot_harman_log_scaled_small.pdf", plot_harman_small,
+       width = 6, height = 6)
+
 
 # EXPLORE -----------------------------------------------------------------
 # No normalisation
@@ -582,3 +603,88 @@ scanorama <- import('scanorama')
 # integrated.corrected.data <- scanorama$correct(datasets, genes_list,
 #                                                return_dimred=TRUE, return_dense=TRUE)
 
+
+# MODELLING ---------------------------------------------------------------
+
+plot_evaluation(log2_transform(raw_maqc), batch_info)
+
+x <- log2_transform(norm.mean_scaling(raw_maqc))
+colnames(x)
+plot(x[,6], x[,7], main = "mean(raw_maqc) (B1B1 vs B1B2)")
+plot(rowMeans(x[,1:5]), rowMeans(x[,11:15]), main = "log2(raw_maqc) (B1-MeanA vs B2-MeanA)")
+abline(a=0, b = 1)
+dev.copy(png, "dump/scatter_fig10.png")
+dev.off()
+
+plot_maqc <- plot_batch(x, batch_info, class_info)
+plot_maqc
+
+batch_factor <- as.factor(rep(1:2, each = 10))
+class_factor <- as.factor(rep(rep(LETTERS[1:2], each = 5), 2))
+
+corrected_df <- norm.CBC(x[,1:20], batch_factor, class_factor, c(1,2), "dump/log_mean_correction.tsv")
+
+correction_vectors <- read.table("dump/log_mean_correction.tsv", sep = "\t")
+
+plot_batch(corrected_df, batch_factor, class_factor)
+plot(correction_vectors$A, correction_vectors$B)
+
+A_avg <- rowMeans(x[,11:15])
+B_avg <- rowMeans(x[,16:15])
+observed_avg <- data.frame(A_avg, B_avg)
+big_diff_ps <- names(A_avg)[abs(A_avg-B_avg) > 5 & A_avg != 0 & B_avg != 0]
+
+par(mfrow=c(1,1))
+
+for (i in 1:12) {
+  probeset <- big_diff_ps[i]
+  plot(unlist(observed_avg[probeset,]),
+       unlist(correction_vectors[probeset,]))
+  abline(a = 0, b = 1)
+}
+
+k_arr <- matrix(0, 54675, 2)
+for (i in 1:54675) {
+  k_arr[i,1] <- correction_vectors[i,1]/observed_avg[i,1]
+  k_arr[i,2] <- correction_vectors[i,2]/observed_avg[i,2]
+}
+
+plot(k_arr[,1], k_arr[,2])
+
+df <- data.frame(A_avg[1:10], A_avg[1:10])
+
+head(correction_vectors)
+head(observed_avg)
+
+max(correction_vectors[,1])
+
+x <- log2_transform(norm.mean_scaling(raw_maqc))
+# B1A1 - B2A1
+plot(x[,1]-x[,11], x[,4]-x[,15]) 
+plot(x[,1]-x[,11], x[,1]-x[,11])
+
+par(mfrow=c(1,1))
+
+plot(x[,6], x[,16],
+     main = "log2(mean(raw_maqc)) (B1B1 vs B2B1)")
+abline(a=0, b = 1)
+dev.copy(png, "dump/scatter_fig11.png")
+dev.off()
+
+plot(rowMeans(x[,1:5]), rowMeans(x[,11:15]),
+     main = "log2(raw_maqc) (B1-MeanA vs B2-MeanA)")
+
+
+plot_arr <- rowMeans(x[,1:5])
+ggplot(data.frame(plot_arr)) +
+  geom_jitter(aes(x = plot_arr, y = 0))
+
+head(cbind(x[,1:5], x[,11:15]), 100)
+
+# Select rows with all positive numbers
+x_nozero <- x[rowSums(x == 0) == 0,]
+
+nozero <- plot_batch(x_nozero, batch_info, class_info)
+gotzero <- plot_batch(x, batch_info, class_info)
+nozero
+gotzero
