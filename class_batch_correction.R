@@ -64,10 +64,12 @@ norm.CBC <- function(df, batch_info, class_info, order_batch, correction_wpath =
       all_correction_df <- cbind(correction_vectors, extra_correction_df)
       correction_vectors <- all_correction_df[,sort(colnames(all_correction_df))]
     }
-    # TODO: PRINT CORRECTION VECTORS
+    # TODO: Give different filenames for different pairwise correction
     write.table(correction_vectors, correction_wpath,
                 quote = F, sep = "\t")
     # Ensure that correction_vectors is ordered the same way as list_class_df2
+    print(names(list_class_df2))
+    print(colnames(correction_vectors))
     stopifnot(identical(names(list_class_df2), colnames(correction_vectors)))
     # Apply correction for each class in df2 (list_class_df2)
     list_corrected_df2 <- unname(mapply(function(df,vec) df-vec,
@@ -107,4 +109,5 @@ norm.CBC <- function(df, batch_info, class_info, order_batch, correction_wpath =
   
   # TODO: How to determine the order!!!
   # ERROR IF A BATCH HAS ONLY ONE CLASS I THINK!!!
+  # ERROR: CLASS HAS TO BE GIVEN IN ALPHABETS!!!
 }

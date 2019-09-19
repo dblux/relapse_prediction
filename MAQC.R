@@ -11,35 +11,63 @@ theme_set(theme_cowplot())
 plot_batch <- function(df, batch_info, shape_info) {
   batch_factor <- factor(batch_info)
   shape_factor <- factor(shape_info)
-  # Melt dataframe
-  melt_df <- melt(df, variable.name = "ID")
-  
-  # Mean probe intensities for each chip
-  mean_tibble <- melt_df %>% group_by(ID) %>%
-    summarise(mean = mean(value))
-  mean_scatter <- ggplot(mean_tibble, aes(x = ID,
-                                         y = mean,
-                                         col = batch_factor,
-                                         shape = shape_factor)) +
-    geom_point(show.legend = F, size = 3) + 
-    theme(axis.text.x = element_text(size = 5, angle = 90, hjust = 1))
   
   # Principal component analysis
   col_logical <- apply(t(df), 2, sum) != 0 & apply(t(df), 2, var) != 0
   pca_df <- t(df)[, col_logical]
   pca_obj <- prcomp(pca_df, center = T, scale. = T)
   # Eigenvalues
+  pca_df <- data.frame(pca_arr)
   eig_value <- (pca_obj$sdev)^2
-  var_pc <- eig_value[1:5]/sum(eig_value)
-  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+  # Percentage variance of each PC
+  var_pct <- eig_value/sum(eig_value)
+  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pct[1:5]*100)
+
+  # Argument: PC coordinates for single PC
+  calc.pc_var <- function(vec) {
+    # Argument: ANOVA attributes; Calculates percentage of variance
+    # SS_between/SS_between + SS_within
+    calc.var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
+    pc_metadata <- data.frame(pc = vec,
+                              batch = as.factor(batch_info),
+                              class = as.factor(class_info))
+    batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
+    class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
+    return(c(calc.var_percentage(batch_anova_attr),
+             calc.var_percentage(class_anova_attr)))
+  }
+  var_composition <- sapply(pca_df, calc.pc_var)
+  pca_var_df <- data.frame(var_pct,
+                           batch_pct = var_composition[1,],
+                           class_pct = var_composition[2,])
+  total_batch_pct <- sum(pca_var_df$var_pct * pca_var_df$batch_pct)*100
+  total_class_pct <- sum(pca_var_df$var_pct * pca_var_df$class_pct)*100
   
+  # PCA scatter plot
   top_pc <- as.data.frame(pca_obj$x[,1:4])
   pc1_pc2 <- ggplot(top_pc, aes(x = PC1, y = PC2, col = batch_factor, shape = shape_factor)) +
     geom_point(size = 3, show.legend = F) +
-    xlab(pc_labels[1]) + ylab(pc_labels[2])
+    labs(x = pc_labels[1], y = pc_labels[2])
+  
   pc3_pc4 <- ggplot(top_pc, aes(x = PC3, y = PC4, col = batch_factor, shape = shape_factor)) +
     geom_point(size = 3, show.legend = F) +
-    xlab(pc_labels[3]) + ylab(pc_labels[4])
+    labs(x = pc_labels[3], y = pc_labels[4])
+  
+  # PLOT MEANS
+  # Melt dataframe
+  melt_df <- melt(df, variable.name = "ID")
+  # Mean probe intensities for each chip
+  mean_tibble <- melt_df %>% group_by(ID) %>%
+    summarise(mean = mean(value))
+  mean_scatter <- ggplot(mean_tibble, aes(x = ID,
+                                          y = mean,
+                                          col = batch_factor,
+                                          shape = shape_factor)) +
+    geom_point(show.legend = F, size = 3) +
+    labs(title = sprintf("BE: %.2f%% \n CV: %.2f%%",
+                         total_batch_pct, total_class_pct)) +
+    theme(axis.text.x = element_text(size = 5, angle = 90, hjust = 1))
+  
   # Plot all graphs
   pca <- plot_grid(pc1_pc2, pc3_pc4)
   multiplot <- plot_grid(mean_scatter, pca, nrow = 2)
@@ -64,45 +92,47 @@ plot_pca <- function(df, batch_info) {
 # IMPORT DATA -------------------------------------------------------------
 raw_maqc <- read.table("../diff_expr/data/MAQC-I/processed/mas5_original-ref.tsv",
                        sep = "\t", header = T, row.names = 1)
-scaled_maqc <- norm.mean_scaling(raw_maqc)
+filtered_maqc <- raw_maqc[filter_probesets(raw_maqc, 0.1),]
+scaled_maqc <- norm.mean_scaling(filtered_maqc)
 log_maqc <- log2_transform(scaled_maqc)
 
+# MAQC metadata
 batch_info <- rep(1:6, each = 10)
 class_info <- rep(rep(1:2, each = 5), 6)
 
 # COMPARISON (EQUAL) ---------------------------------------------------------------
-# No normalisation
-plot_before <- plot_batch(raw_maqc, batch_info, shape_info)
-plot_before
-ggsave("dump/plot_before.pdf", plot_before,
-       width = 6, height = 6)
-
-selected_probesets <- filter_probesets(raw_maqc, 0.98)
-filtered_maqc <- raw_maqc[selected_probesets,]
-nrow(filtered_maqc)
-filtered_plot <- plot_batch(filtered_maqc, batch_info, shape_info)
-filtered_plot
-
-# Mean-scaling
-scaled_maqc <- norm_mean_scaling(raw_maqc)
-plot_scaled <- plot_batch(scaled_maqc, batch_info, shape_info)
-plot_scaled
-ggsave("dump/plot_scaled.pdf", plot_scaled,
-       width = 6, height = 6)
-
-# CDF
-rank_maqc <- norm.cdf(raw_maqc)
-plot_batch(rank_maqc, batch_info, shape_info)
-
-# GFS
-gfs_maqc <- norm_gfs(raw_maqc)
-plot_gfs <- plot_batch(gfs_maqc, batch_info, shape_info)
-ggsave("dump/plot_gfs.pdf", plot_gfs,
-       width = 6, height = 6)
+# # No normalisation
+# plot_before <- plot_batch(raw_maqc, batch_info, shape_info)
+# plot_before
+# ggsave("dump/plot_before.pdf", plot_before,
+#        width = 6, height = 6)
+# 
+# selected_probesets <- filter_probesets(raw_maqc, 0.98)
+# filtered_maqc <- raw_maqc[selected_probesets,]
+# nrow(filtered_maqc)
+# filtered_plot <- plot_batch(filtered_maqc, batch_info, shape_info)
+# filtered_plot
+# 
+# # Mean-scaling
+# scaled_maqc <- norm_mean_scaling(raw_maqc)
+# plot_scaled <- plot_batch(scaled_maqc, batch_info, shape_info)
+# plot_scaled
+# ggsave("dump/plot_scaled.pdf", plot_scaled,
+#        width = 6, height = 6)
+# 
+# # CDF
+# rank_maqc <- norm.cdf(raw_maqc)
+# plot_batch(rank_maqc, batch_info, shape_info)
+# 
+# # GFS
+# gfs_maqc <- norm_gfs(raw_maqc)
+# plot_gfs <- plot_batch(gfs_maqc, batch_info, shape_info)
+# ggsave("dump/plot_gfs.pdf", plot_gfs,
+#        width = 6, height = 6)
 
 # MNN
 # Split dataframe according to batch info
-list_df <- split.default(raw_maqc, batch_info)
+list_df <- split.default(log_maqc, batch_info)
 # Convert df to arr
 list_arr <- lapply(list_df, data.matrix)
 list_args <- c(list_arr, k = 5, cos.norm.out = F)
@@ -112,23 +142,21 @@ mnn_maqc_arr <- do.call(cbind, mnn_maqc_obj$corrected)
 colnames(mnn_maqc_arr) <- colnames(log_maqc)
 plot_mnn <- plot_batch(data.frame(mnn_maqc_arr), batch_info, class_info)
 plot_mnn
+
 ggsave("dump/plot_mnn_log_scaled_k5.pdf", plot_mnn_log_scaled,
        width = 6, height = 6)
 
 # Investigate MNNs ability to correct for multiplicative error
 
-
 # Quantile normalisation
-col_indx <- substring(colnames(raw_maqc), 7, 7) == "A"
-qnorm_a <- norm_quantile(raw_maqc[,col_indx])
-qnorm_b <- norm_quantile(raw_maqc[,!col_indx])
+col_indx <- substring(colnames(log_maqc), 7, 7) == "A"
+qnorm_a <- norm.quantile(log_maqc[,col_indx])
+qnorm_b <- norm.quantile(log_maqc[,!col_indx])
 qnorm_maqc <- cbind(qnorm_a, qnorm_b)
-
 colnames(qnorm_maqc)
-batch_qnorm <- rep(rep(1:6, each = 5), 2)
-shape_qnorm <- rep(1:2, each = 30)
-plot_qnorm <- plot_batch(qnorm_maqc, batch_qnorm, shape_qnorm)
-ggsave("dump/plot_qnorm.pdf", plot_qnorm,
+plot_qnorm <- plot_batch(qnorm_maqc, batch_info, class_info)
+plot_qnorm
+ggsave("dump/plot_class_qnorm.pdf", plot_qnorm,
        width = 6, height = 6)
 
 # Harman
@@ -159,38 +187,31 @@ ggsave("dump/plot_scanorama_k10.pdf", plot_scanorama,
 
 # ComBat ------------------------------------------------------------------
 # Creation of pData dataframe (metadata)
-class <- as.factor(substring(colnames(raw_maqc), 7, 7))
-batch <- as.factor(substring(colnames(raw_maqc), 5, 5))
+class <- as.factor(class_info)
+batch <- as.factor(batch_info)
 maqc_metadata <- data.frame(class, batch)
 # Rownames of metadata are same as colnames of data df
 rownames(maqc_metadata) <- colnames(raw_maqc)
-maqc_metadata
-
-# ComBat assumes that data has been normalised and probesets have been filtered
-# Error if probesets are not filtered as rows have 0 variance
-selected_probetsets <- filter_probesets(log_maqc, 0.1)
-filtered_maqc <- log_maqc[selected_probetsets,]
-
+head(maqc_metadata)
 # Place adjustment/confounding variables in model.matrix (e.g. age)
 # Do not put batch variables in model.matrix
 # Put batch variables directly in combat function
 model_combat <- model.matrix(~1, data = maqc_metadata)
+# Include biological variable of interest as covariate
+model_combat <- model.matrix(~class, data = maqc_metadata)
 # # Include biological variable of interest as covariate
 # model_combat <- model.matrix(~class, data = maqc_metadata)
-
-combat_maqc <- ComBat(data.matrix(filtered_maqc),
+combat_maqc <- ComBat(data.matrix(log_maqc),
                       batch = maqc_metadata$batch,
                       mod = model_combat)
 combat_maqc_df <- data.frame(combat_maqc)
 # Replace negative values with 0
 combat_maqc_df[combat_maqc_df < 0] <- 0
 
-plot_combat_scaled <- plot_batch(combat_maqc_df, batch_info, class_info)
-plot_combat_scaled
+plot_combat <- plot_batch(combat_maqc_df, batch_info, class_info)
+plot_combat
 
-plot_log_combat_scaled <- plot_batch(log2_transform(combat_maqc_df), batch_info, shape_info)
-plot_log_combat_scaled
-ggsave("dump/plot_log_combat_scaled.pdf", plot_log_combat_scaled,
+ggsave("dump/plot_FSL_combatCovariate.pdf", plot_combat,
        width = 6, height = 6)
 
 # Log-transform data after mean-scaling
@@ -207,19 +228,13 @@ ggsave("dump/plot_combat_log_scaled.pdf", plot_combat_log_scaled,
        width = 6, height = 6)
 
 # CBC ---------------------------------------------------------------------
-class_info <- ifelse(shape_info == 1, "A", "B")
+class_info <- ifelse(class_info == 1, "A", "B")
+cbc_maqc <- norm.CBC(log_maqc, batch_info, class_info, 1:6, "dump/correction_log_maqc.tsv")
 
-# Perform trimmed mean scaling first
-scaled_maqc <- norm.mean_scaling(raw_maqc)
-cbc_maqc <- norm.CBC(scaled_maqc, batch_info, class_info, 1:6)
+plot_cbc <- plot_batch(cbc_maqc, batch_info, class_info)
+plot_cbc
 
-plot_scaled <- plot_batch(scaled_maqc, batch_info, class_info)
-plot_log_scaled <- plot_batch(log2_transform(scaled_maqc), batch_info, class_info)
-
-ggsave("dump/plot_scaled.pdf", plot_scaled,
-       width = 6, height = 6)
-
-ggsave("dump/plot_log_scaled.pdf", plot_log_scaled,
+ggsave("dump/plot_cbc.pdf", plot_cbc,
        width = 6, height = 6)
 
 # Apply log first before scaling or normalisation
@@ -246,12 +261,9 @@ ggsave("dump/plot_log_cbc_log_scaled.pdf", plot_log_cbc_log_scaled,
 # Selects samples such that each batch has a diff proportion of classes
 # Proportions rep(rep(LETTERS[1:2], 6), c(5,5,4,5,5,4,3,5,5,3,3,4))
 selection_index <- c(1:10,11:14,16:20,21:25,26:29,31:33,36:40,41:45,46:48,51:53,56:59)
-odd_maqc <- raw_maqc[,selection_index]
+odd_maqc <- log_maqc[,selection_index]
 odd_batch_info <- rep(1:6, c(10,9,9,8,8,7))
 odd_class_info <- substring(colnames(odd_maqc), 7, 7)
-# Scale and log-transform odd_maqc
-odd_scaled_maqc <- norm.mean_scaling(odd_maqc)
-odd_log_maqc <- log2_transform(odd_scaled_maqc)
 
 # ComBat
 # Creation of pData dataframe (metadata)
@@ -273,7 +285,6 @@ odd_filtered_maqc <- odd_log_maqc[selected_probesets,]
 # model_combat <- model.matrix(~1, data = maqc_metadata)
 # Include biological variable of interest as covariate
 model_combat <- model.matrix(~class, data = odd_maqc_metadata)
-
 
 combat_maqc <- ComBat(data.matrix(odd_filtered_maqc),
                       batch = odd_maqc_metadata$batch,
@@ -688,3 +699,63 @@ nozero <- plot_batch(x_nozero, batch_info, class_info)
 gotzero <- plot_batch(x, batch_info, class_info)
 nozero
 gotzero
+
+# EVALUATION --------------------------------------------------------------
+filtered_maqc <- raw_maqc[filter_probesets(raw_maqc, 0.1),]
+scaled_maqc <- norm.mean_scaling(filtered_maqc)
+log_maqc <- log2_transform(scaled_maqc)
+
+plot_batch(log_maqc, batch_info, class_info)
+# ANOVA
+batch_info <- rep(LETTERS[1:6], each = 10)
+df <- log_maqc
+pca_obj <- prcomp(t(df), center = T, scale. = T)
+pca_arr <- pca_obj$x
+pca_df <- data.frame(pca_arr)
+eig_value <- (pca_obj$sdev)^2
+var_pct <- eig_value/sum(eig_value)
+
+# Argument: PC coordinates for single PC
+calc.pc_var <- function(vec) {
+  # Argument: ANOVA attributes; Calculates percentage of variance
+  # SS_between/SS_between + SS_within
+  calc.var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
+  pc_metadata <- data.frame(pc = vec,
+                            batch = as.factor(batch_info),
+                            class = as.factor(class_info))
+  batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
+  class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
+  return(c(calc.var_percentage(batch_anova_attr),
+           calc.var_percentage(class_anova_attr)))
+}
+var_composition <- sapply(pca_df, calc.pc_var)
+pca_var_df <- data.frame(var_pct,
+                         batch_pct = var_composition[1,],
+                         class_pct = var_composition[2,])
+total_batch_pct <- sum(pca_var_df$var_pct * pca_var_df$batch_pct)
+total_class_pct <- sum(pca_var_df$var_pct * pca_var_df$class_pct)
+
+# ANOVA (Odd)
+odd_batch_info
+filtered_odd_maqc <- odd_maqc[filter_probesets(odd_maqc, 0.1),]
+df <- filtered_odd_maqc
+pca_obj <- prcomp(t(df), center = T, scale. = T)
+pca_arr <- pca_obj$x
+odd_single_pc_df <- data.frame(pc = pca_arr[,1],
+                           batch = as.factor(odd_batch_info))
+odd_single_pc_df
+odd_aov_obj <- aov(pc~batch, data = odd_single_pc_df)
+summary(odd_aov_obj)
+dim(odd_single_pc_df)
+
+# Explore total variance of data matrix
+hist(data.matrix(log_maqc[10,]), breaks = 20)
+# Checking that SS_total = SS_between + SS_within
+vector <- unlist(log_maqc[10,])
+ss_total <- sum((vector-mean(vector))^2)
+list_batches <- split(vector, rep(1:6, each = 10))
+list_groupmeans <- lapply(list_batches, mean)
+vec_groupmeans <- do.call(c, list_groupmeans)
+ss_between <- sum((vec_groupmeans - mean(vector))^2)*10
+within_var <- mapply(function(vec, mean) sum((vec-mean)^2), list_batches, list_groupmeans)
+ss_within <- sum(within_var)
