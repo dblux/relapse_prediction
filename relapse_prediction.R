@@ -1,7 +1,11 @@
 # library(Rtsne)
 # library(dendextend)
+library(gPCA)
+library(xtable)
+library(cluster)
 library(sva)
 library(scran)
+library(Harman)
 library(rgl)
 library(ggplot2)
 library(cowplot)
@@ -226,6 +230,7 @@ pca_all <- function(df, colour_code, shape_vec, pc_labels) {
 # 3D PCA plot
 plot.pca_3d <- function(df, colour_code, shape_vec, pc_labels = NULL, ratio_list = list(2,1,1)) {
   if (is.null(pc_labels)) {
+    print("PCA performed!")
     pca_obj <- prcomp(t(df), center = T, scale. = F)
     pca_df <- as.data.frame(pca_obj$x[,1:3])
     eig_value <- (pca_obj$sdev)^2
@@ -233,6 +238,7 @@ plot.pca_3d <- function(df, colour_code, shape_vec, pc_labels = NULL, ratio_list
     print(var_pc)
     pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
   } else {
+    print("No PCA performed!")
     pca_df <- as.data.frame(df)
   }
   # RGL plot parameters
@@ -307,7 +313,7 @@ plot_vectors <- function(df, centroid_df, pc_labels, batch_colour, subtype_colou
 }
 
 calc.var_preservation <- function(df_bef, df_aft) {
-  return(sum(rowVars(data.matrix(df_aft)))/sum(rowVars(data.matrix(df_bef))))
+  return(sum(apply(df_aft, 1, var))/sum(apply(df_bef, 1, var)))
 }
 
 # IMPORT DATA -------------------------------------------------------------
@@ -321,9 +327,6 @@ yeoh_batch <- read.table("data/GSE67684/processed/metadata_combined-batch.tsv",
                          sep = "\t", header = T, row.names = 1)
 yeoh_label <- read.table("data/GSE67684/processed/metadata_combined-label_subtype_edited.tsv",
                          sep = "\t", header = T, row.names = 1)
-
-batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
-class_info <- rep(c("D0","D8","N"), c(208,208,45))
 
 # Removal of outlier samples and their associated pairs
 # Patients "P198_D8", "P186_D0" are associated pairs
@@ -347,12 +350,28 @@ yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
 scaled_yeoh <- norm.mean_scaling(yeoh_combined)
 # Filtering of probesets
 selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
-selected_yeoh <- scaled_yeoh[selected_probesets,]
+filtered_yeoh <- scaled_yeoh[selected_probesets,]
 # Log2_transform
-log_yeoh <- log2_transform(selected_yeoh)
+log_yeoh <- log2_transform(filtered_yeoh)
 
-calc.var_composition(log_yeoh, batch_info, class_info)
-calc.var_preservation(log_yeoh, combat_yeoh)
+batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
+class_info <- rep(c("D0","D8","N"), c(208,208,45))
+class_numeric <- rep(1:3, c(208,208,45))
+
+# # Plot PCA before selecting features
+# # Batch information of all the timepoints
+# batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
+# generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+# batch_palette <- generate_colour(10)
+# batch_colour <- batch_palette[batch_info]
+# # Shape of all timepoints
+# timepoint_shape <- rep(21:23, c(208,208,45))
+# 
+# plot.pca_3d(log_yeoh, batch_colour, timepoint_shape)
+# rgl.postscript("dump/fig/pca_3d-uncorrected_data.pdf", "pdf")
+# 
+# # Original batch effects metric
+# eval.batch_effects(log_yeoh, batch_info, class_numeric)
 
 # VISUALISATION -----------------------------------------------------------
 yeoh_combined <- cbind(yeoh_d0d8, yeoh_d33, yeoh_normal)
@@ -416,26 +435,21 @@ quantile1_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33)
 plot.pca_3d(quantile1_yeoh, batch_colour1, shape_2d1, list(2,1,1))
 rgl.postscript("dump/pca_3d-quantile_new.pdf", "pdf")
 
-
 # QUANTILE ---------------------------------------------------------
-# Quantile (all time points together)
-quantile_yeoh <- norm.quantile(log_yeoh)
-quantile_d0 <- quantile_yeoh[,1:208]
-quantile_d8 <- quantile_yeoh[,209:416]
-quantile_d33 <- quantile_yeoh[,417:458]
-quantile_normal <- quantile_yeoh[,459:461]
-
-calc.var_composition(quantile_yeoh, batch_info, class_info)
-calc.var_preservation(log_yeoh, quantile_yeoh)
+# ### QUANTILE (ALL)
+# quantile_yeoh <- norm.quantile(log_yeoh)
+# quantile_d0 <- quantile_yeoh[,1:208]
+# quantile_d8 <- quantile_yeoh[,209:416]
+# quantile_normal <- quantile_yeoh[,417:461]
 
 ### QUANTILE (TIMEPOINT)
-quantile_d0 <- norm.quantile(selected_yeoh[, 1:208])
-quantile_d8 <- norm.quantile(selected_yeoh[, 209:416])
-quantile_d33 <- norm.quantile(selected_yeoh[, 417:458])
-quantile_normal <- norm.quantile(selected_yeoh[, 459:461])
-quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33, quantile_normal)
-colnames(selected_yeoh)[459:461]
-dim(selected_yeoh)
+quantile_d0 <- norm.quantile(log_yeoh[, 1:208])
+quantile_d8 <- norm.quantile(log_yeoh[, 209:416])
+quantile_normal <- norm.quantile(log_yeoh[, 417:461])
+quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_normal)
+
+calc.var_preservation(log_yeoh, quantile_yeoh)
+metrics <- eval.batch_effects(quantile_yeoh, batch_info, class_numeric)
 
 # Plot PCA before selecting features
 # Batch information of all the timepoints
@@ -444,37 +458,450 @@ generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
 batch_palette <- generate_colour(10)
 batch_colour <- batch_palette[batch_info]
 # Shape of all timepoints
-timepoint_shape <- rep(21:24, c(208,208,42,3))
+timepoint_shape <- rep(21:23, c(208,208,45))
 plot.pca_3d(quantile_yeoh, batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-quantile_timepoint_log_all_feature.pdf", "pdf")
+rgl.postscript("dump/pca_3d-cs_quantile.pdf", "pdf")
 
 # Selecting drug responsive genes between D0 and D8
 ttest_pvalue <- calc_ttest(cbind(quantile_d0, quantile_d8), 208, is_paired = T)
-log_fc <- calc_logfc(quantile_d0, quantile_d8)
+log_fc <- rowMeans(quantile_d8) - rowMeans(quantile_d0)
 pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
 fc_probesets <- names(log_fc)[log_fc > 1]
 intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
 print(length(intersect_probesets))
 
-log_d0 <- log2_transform(quantile_d0[intersect_probesets,])
-log_d8 <- log2_transform(quantile_d8[intersect_probesets,])
-log_normal <- log2_transform(quantile_normal[intersect_probesets,])
-log_d33 <- log2_transform(quantile_d33[intersect_probesets,])
-log_combined <- cbind(log_d0, log_d8, log_d33, log_normal)
-
-# log_d0 <- quantile_d0
-# log_d8 <- quantile_d8
-# log_normal <- quantile_normal
-# log_d33 <- quantile_d33
+corrected_df <- quantile_yeoh[intersect_probesets,]
 
 # # MILE data
 # scaled_mile <- norm.mean_scaling(mile_data[selected_probesets, 751:824])
 # quantile_mile <- norm.quantile(scaled_mile)
 # log_mile <- log2_transform(quantile_mile[intersect_probesets,])
 # transposed_df <- t(cbind(log_d0, log_mile))
+# QNORM - PROTOTYPE -------------------------------------------------------
+### QUANTILE (TIMEPOINT)
+quantile_d0 <- norm.quantile(subset_yeoh[, 1:207])
+quantile_d8 <- norm.quantile(subset_yeoh[, 208:414])
+quantile_normal <- norm.quantile(subset_yeoh[, 415:417])
+quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_normal)
+colnames(subset_yeoh)[415:417]
+
+calc.var_composition(quantile_yeoh, batch_info, class_info)
+calc.var_preservation(log_yeoh, quantile_yeoh)
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(quantile_yeoh), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(207,207,3))
+plot.pca_3d(quantile_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-quantile_timepoint_log_all_feature.pdf", "pdf")
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(cbind(quantile_d0, quantile_d8), 207, is_paired = T)
+log_fc <- rowMeans(quantile_d8) - rowMeans(quantile_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+selected_quantile_yeoh <- quantile_yeoh[intersect_probesets,]
+
+corrected_df <- selected_quantile_yeoh
+# PCA
+pca_obj <- prcomp(t(corrected_df))
+# PCA: Eigenvalues
+eig_value <- (pca_obj$sdev)^2
+var_pc <- eig_value[1:5]/sum(eig_value)
+pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+
+# PCA: Coordinates
+pca_coord <- pca_obj$x[,1:4]
+# Response df and normal df
+response_df <- pca_coord[1:414, 1:3]
+normal_df <- pca_coord[415:417, 1:3]
+
+# Calculating ERM distance
+features_df1 <- calc_erm1(response_df, normal_df)
+features_df2 <- calc_erm2(response_df, normal_df)
+features_df3 <- calc_erm3(response_df, normal_df)
+
+# Quantile (Class) - ComBat -----------------------------------------------
+colnames(log_yeoh)
+# Quantile by timepoint
+quantile_d0 <- norm.quantile(log_yeoh[, 1:208])
+quantile_d8 <- norm.quantile(log_yeoh[, 209:416])
+quantile_normal <- norm.quantile(log_yeoh[, 417:461])
+quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_normal)
+
+# Obtaining batch information of selected_yeoh df
+# Rows of metadata are to be in same order as columns of edata
+batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
+timepoint_info <- as.factor(rep(c("D0","D8","N"), c(208,208,45)))
+
+yeoh_metadata <- data.frame(batch = as.factor(batch_info),
+                            timepoint = timepoint_info)
+# Place adjustment/confounding variables in model.matrix (e.g. age)
+# Do not put batch variables in model.matrix
+# # # Put batch variables directly in combat function
+# model_combat <- model.matrix(~1, data = yeoh_metadata)
+# Include biological variable of interest as covariate
+model_combat <- model.matrix(~timepoint, data = yeoh_metadata)
+combat_yeoh <- ComBat(data.matrix(quantile_yeoh), batch_info, model_combat)
+
+# Replacing negative values with 0
+combat_yeoh[combat_yeoh < 0] <- 0
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(208,208,45))
+
+plot.pca_3d(combat_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-cs_quantile_combat_cov.pdf", "pdf")
+
+calc.var_preservation(log_yeoh, combat_yeoh)
+metrics <- eval.batch_effects(combat_yeoh, batch_info, class_numeric)
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(combat_yeoh[,1:416], 208, is_paired = T)
+combat_d0 <- combat_yeoh[,1:208]
+combat_d8 <- combat_yeoh[,209:416]
+log_fc <- rowMeans(combat_d8) - rowMeans(combat_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+corrected_df <- combat_yeoh[intersect_probesets,]
+
+# MNN ---------------------------------------------------------------------
+# Splitting up yeoh data into batches
+batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
+batch_list <- lapply(1:10, function(i) log_yeoh[, batch_info == i])
+arr_list <- lapply(batch_list, data.matrix)
+
+colnum_list <- sapply(arr_list, ncol)
+batch_order <- order(colnum_list, decreasing = T)
+print(batch_order)
+
+# Ordered according to number of samples in batch
+mnn_yeoh_obj <- mnnCorrect(arr_list[[2]],
+                           arr_list[[9]],
+                           arr_list[[10]],
+                           arr_list[[8]],
+                           arr_list[[5]],
+                           arr_list[[3]],
+                           arr_list[[1]],
+                           arr_list[[6]],
+                           arr_list[[4]],
+                           arr_list[[7]],
+                           k = 3,
+                           cos.norm.out = F)
+mnn_yeoh <- do.call(cbind, mnn_yeoh_obj$corrected)
+
+# Column names for matrix arranged in above order
+colnames_vec <- unlist(sapply(arr_list[batch_order], colnames))
+colnames(mnn_yeoh) <- colnames_vec
+# Order columns according to name and timepoint
+ordered_mnn_yeoh <- mnn_yeoh[,order(colnames(mnn_yeoh))]
+ordered_mnn_yeoh1 <- cbind(ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "0")],
+                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "8")],
+                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "33")],
+                           ordered_mnn_yeoh[,startsWith(colnames(ordered_mnn_yeoh), "N")])
+# Replace negative values with zero
+ordered_mnn_yeoh1[ordered_mnn_yeoh1 < 0] <- 0
+# ordered_mnn_yeoh1[1:10,1:10]
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(ordered_mnn_yeoh1), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(208,208,45))
+plot.pca_3d(ordered_mnn_yeoh1, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-MNN_K3.pdf", "pdf")
+
+calc.var_preservation(log_yeoh, ordered_mnn_yeoh1)
+metrics <- eval.batch_effects(ordered_mnn_yeoh1, batch_info, class_numeric)
+
+mnn_d0 <- ordered_mnn_yeoh1[,1:208]
+mnn_d8 <- ordered_mnn_yeoh1[,209:416]
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(cbind(mnn_d0, mnn_d8), 208, is_paired = T)
+log_fc <- rowMeans(mnn_d8) - rowMeans(mnn_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+# Filter and log transform
+corrected_df <- ordered_mnn_yeoh1[intersect_probesets,]
+
+# BCM ------------------------------------------------------------------
+timepoint_info <- rep(c("D0","D8","N"), c(208,208,45))
+table(batch_info, timepoint_info)
+order_batch <- c(10,9,8,7,6,4,3,1,2,5)
+cbc_yeoh <- norm.CBC(log_yeoh, batch_info, timepoint_info, order_batch)
+
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(cbc_yeoh), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(208,208,45))
+
+plot.pca_3d(cbc_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-bcm.pdf", "pdf")
+
+calc.var_preservation(log_yeoh, cbc_yeoh)
+metrics <- eval.batch_effects(cbc_yeoh, batch_info, class_numeric)
+
+# Selecting drug responsive genes between D0 and D8
+cbc_d0 <- cbc_yeoh[,1:208]
+cbc_d8 <- cbc_yeoh[,209:416]
+ttest_pvalue <- calc_ttest(cbc_yeoh[,1:416], 208, is_paired = T)
+log_fc <- rowMeans(cbc_d8) - rowMeans(cbc_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+corrected_df <- cbc_yeoh[intersect_probesets,]
+# BCM - SUBSET -------------------------------------------------------
+id_notin5 <- rownames(yeoh_batch)[yeoh_batch$batch != 5]
+
+# Remove batch 5 from df and P107_D8
+subset_yeoh <- log_yeoh[, colnames(log_yeoh) %in% id_notin5 & colnames(log_yeoh) != "P107_D8"]
+subset_batch <- yeoh_batch[colnames(subset_yeoh), "batch"]
+subset_class <- substring(colnames(subset_yeoh), 6, 8)
+subset_class[415:417] <- "N"
+
+table(batch_info, timepoint_info)
+subset_order <- c(10,9,8,7,6,4,3,1,2)
+subset_cbc_yeoh <- norm.CBC(subset_yeoh, subset_batch, subset_class, subset_order)
+
+subset_batch_colour <- batch_palette[subset_batch]
+# Shape of all timepoints
+subset_class_shape <- rep(21:23, c(207,208,3))
+plot.pca_3d(subset_cbc_yeoh, subset_batch_colour, subset_class_shape)
+rgl.postscript("dump/pca_3d-cbc_yeoh_no5.pdf", "pdf")
 
 # PCA
-pca_obj <- prcomp(t(log_combined))
+pca_obj <- prcomp(t(subset_cbc_yeoh))
+# PCA: Eigenvalues
+eig_value <- (pca_obj$sdev)^2
+var_pc <- eig_value[1:5]/sum(eig_value)
+pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+
+# PCA: Coordinates
+pca_coord <- pca_obj$x[,1:4]
+# Response df and normal df
+response_df <- pca_coord[1:414, 1:3]
+normal_df <- pca_coord[415:417, 1:3]
+
+# Calculating ERM distance
+features_df1 <- calc_erm1(response_df, normal_df)
+features_df2 <- calc_erm2(response_df, normal_df)
+features_df3 <- calc_erm3(response_df, normal_df)
+
+# # Using probesets values directly
+# t_subset_cbc <- t(subset_cbc_yeoh)
+# response_df <- t_subset_cbc[1:414,]
+# normal_df <- t_subset_cbc[415:417,]
+
+# ### TRIAL PLOTTING
+# relapse_id <- rownames(yeoh_label)[yeoh_label$label == 1]
+# relapse_logvec <- substring(colnames(subset_cbc_yeoh), 1, 4) %in% relapse_id
+# pca_relapse <- pca_coord[relapse_logvec,]
+# pca_norelapse <- pca_coord[!relapse_logvec,]
+# 
+# plot.pca_3d(pca_relapse, "skyblue", rep(21:22, each = 5), pc_labels)
+# plot.pca_3d(pca_norelapse, "skyblue", rep(21:23, c(156,156,3)), pc_labels)
+
+# BCM - DIFF --------------------------------------------------------------
+id_notin5 <- rownames(yeoh_batch)[yeoh_batch$batch != 5]
+# Remove batch 5 from df
+subset_yeoh <- log_yeoh[, colnames(log_yeoh) %in% id_notin5]
+subset_batch <- yeoh_batch[colnames(subset_yeoh), "batch"]
+subset_class <- substring(colnames(subset_yeoh), 6, 8)
+subset_class[416:418] <- "N"
+
+table(batch_info, timepoint_info)
+subset_order <- c(10,9,8,7,6,4,3,1,2)
+# Perform BMC correction without batch 5
+subset_cbc_yeoh <- norm.CBC(subset_yeoh, subset_batch, subset_class, subset_order)
+
+# Batch 5 df
+id_in5 <- rownames(yeoh_batch)[yeoh_batch$batch == 5]
+batch5_yeoh <- log_yeoh[, colnames(log_yeoh) %in% id_in5]
+
+kantan_df <- cbind(subset_cbc_yeoh, batch5_yeoh)
+kantan_batch <- rep(1:2, c(ncol(subset_cbc_yeoh), ncol(batch5_yeoh)))
+kantan_class <- substring(colnames(kantan_df), 6, 8)
+kantan_class[416:418] <- "N"
+
+cbc_kantan_df <- norm.CBC(kantan_df, kantan_batch, kantan_class, 1:2, "dump/diff_kantan_vectors.tsv")
+# Sort columns of corrected df
+cbc_kantan_df <- cbc_kantan_df[,colnames(log_yeoh)]
+
+kantan_real_batch <- yeoh_batch[colnames(cbc_kantan_df), "batch"]
+kantan_batch_colour <- batch_palette[kantan_real_batch]
+kantan_class_factor <- as.factor(kantan_class)
+levels(kantan_class_factor) <- c(21,23,22,24)
+kantan_class_shape <- as.numeric(levels(kantan_class_factor))[kantan_class_factor]
+
+# Shape of all timepoints
+plot.pca_3d(cbc_kantan_df, kantan_batch_colour, kantan_class_shape)
+rgl.postscript("dump/pca_3d-cbc_yeoh.pdf", "pdf")
+
+# Selecting drug responsive genes between D0 and D8
+cbc_d0 <- cbc_kantan_df[,1:208]
+cbc_d8 <- cbc_kantan_df[,209:416]
+ttest_pvalue <- calc_ttest(cbc_kantan_df[,1:416], 208, is_paired = T)
+log_fc <- rowMeans(cbc_d8) - rowMeans(cbc_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+corrected_df <- cbc_kantan_df[intersect_probesets,]
+# ComBat ------------------------------------------------------------------
+# Obtaining batch information of selected_yeoh df
+# Rows of metadata are to be in same order as columns of edata
+batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
+timepoint_info <- as.factor(rep(c("D0","D8","N"), c(208,208,45)))
+yeoh_metadata <- data.frame(batch = as.factor(batch_info),
+                            timepoint = timepoint_info)
+head(yeoh_metadata)
+
+# Place adjustment/confounding variables in model.matrix (e.g. age)
+# Do not put batch variables in model.matrix
+# ### Put batch variables directly in combat function
+# model_combat <- model.matrix(~1, data = yeoh_metadata)
+
+### Include biological variable of interest as covariate
+model_combat <- model.matrix(~timepoint, data = yeoh_metadata)
+
+# ComBat batch correction
+combat_yeoh <- ComBat(data.matrix(log_yeoh), batch_info, model_combat)
+
+# Replacing negative values with 0
+combat_yeoh[combat_yeoh < 0] <- 0
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(208,208,45))
+
+plot.pca_3d(combat_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-combat_cov.pdf", "pdf")
+
+# Quantitative evaluation
+calc.var_preservation(log_yeoh, combat_yeoh)
+metrics <- eval.batch_effects(combat_yeoh, batch_info, class_numeric)
+
+# Selecting drug responsive genes between D0 and D8
+combat_d0 <- combat_yeoh[,1:208]
+combat_d8 <- combat_yeoh[,209:416]
+ttest_pvalue <- calc_ttest(cbind(combat_d0, combat_d8), 208, is_paired = T)
+log_fc <- rowMeans(combat_d8) - rowMeans(combat_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+corrected_yeoh <- combat_yeoh[intersect_probesets,]
+
+# Harman ------------------------------------------------------------------
+harman_obj <- harman(log_yeoh, class_info, batch_info, limit = 0.95)
+harman_yeoh <- data.frame(reconstructData(harman_obj))
+
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(harman_yeoh), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(208,208,45))
+
+plot.pca_3d(harman_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-harman_yeoh.pdf", "pdf")
+
+calc.var_preservation(log_yeoh, harman_yeoh)
+metrics <- eval.batch_effects(harman_yeoh, batch_info, class_numeric)
+
+# Selecting drug responsive genes between D0 and D8
+harman_d0 <- harman_yeoh[,1:208]
+harman_d8 <- harman_yeoh[,209:416]
+ttest_pvalue <- calc_ttest(harman_yeoh[,1:416], 208, is_paired = T)
+log_fc <- rowMeans(harman_d8) - rowMeans(harman_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(intersect_probesets))
+
+corrected_df <- harman_yeoh[intersect_probesets,]
+
+# Scanorama ---------------------------------------------------------------
+# Order samples according to batches
+batch_list <- lapply(1:10, function(i) log_yeoh[, batch_info == i])
+batch_ordered_yeoh <- do.call(cbind, batch_list)
+
+# # Write log_maqc for numpy array
+# write.table(batch_ordered_yeoh, "data/scanorama/batch_ordered_yeoh.tsv",
+#             quote = F, sep = "\t", row.names = F, col.names = F)
+# write(rownames(log_yeoh), file = "data/scanorama/yeoh-probesets.txt")
+
+scanorama_yeoh <- read.table("data/scanorama/yeoh-scanorama_k3.tsv",
+                             sep = "\t", row.names = 1)
+colnames(scanorama_yeoh) <- colnames(batch_ordered_yeoh)
+# Reorder columns according to log_yeoh
+ordered_scanorama <- scanorama_yeoh[,colnames(log_yeoh)]
+
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(ordered_scanorama), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(208,208,45))
+plot.pca_3d(scanorama_maqc*100, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-scanorama_K3.pdf", "pdf")
+
+calc.var_preservation(log_yeoh, ordered_scanorama)
+metrics <- eval.batch_effects(ordered_scanorama, batch_info, class_numeric)
+colnames(ordered_scanorama)
+
+scanorama_d0 <- ordered_scanorama[,1:208]
+scanorama_d8 <- ordered_scanorama[,209:416]
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(cbind(scanorama_d0, scanorama_d8), 208, is_paired = T)
+log_fc <- rowMeans(scanorama_d8) - rowMeans(scanorama_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+fc_probesets <- names(log_fc)[log_fc > 1]
+intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(fc_probesets))
+# Filter and log transform
+corrected_df <- ordered_scanorama[intersect_probesets,]
+# ERM CALCULATION ---------------------------------------------------------
+# corrected_df <- selected_quantile_yeoh
+# PCA
+pca_obj <- prcomp(t(corrected_df))
 # PCA: Eigenvalues
 eig_value <- (pca_obj$sdev)^2
 var_pc <- eig_value[1:5]/sum(eig_value)
@@ -520,415 +947,96 @@ features_df3 <- calc_erm3(response_df, normal_df)
 # features_df2 <- calc_erm2(response_df, normal_df)
 # features_df3 <- calc_erm3(response_df, normal_df)
 
-# Quantile (Class) - ComBat -----------------------------------------------
-colnames(log_yeoh)
-# Quantile by timepoint
-quantile_d0 <- norm.quantile(log_yeoh[, 1:208])
-quantile_d8 <- norm.quantile(log_yeoh[, 209:416])
-quantile_d33 <- norm.quantile(log_yeoh[, 417:458])
-quantile_normal <- norm.quantile(log_yeoh[, 459:461])
-quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_d33, quantile_normal)
+# SAVE RESULTS -----------------------------------------------------------------
+### Extracting truth labels and training/test
+collate_results <- function(features_df1, features_df2, features_df3, yeoh_label) {
+  features_df <- cbind(features_df1, features_df2, features_df3)
+  colnames(features_df) <- c("erm1", "erm1_ratio", "erm2", "erm2_ratio", "erm3", "erm3_ratio")
+  row_index <- substring(rownames(features_df),1,4)
+  labels_yeoh <- yeoh_label[row_index, 5:6]
+  results_df <- cbind(features_df, labels_yeoh)
+  rownames(results_df) <- row_index
+  return(results_df)
+}
 
-# Obtaining batch information of selected_yeoh df
-# Rows of metadata are to be in same order as columns of edata
-batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
-timepoint_info <- as.factor(rep(c("D0","D8","Normal"), c(208,208,45)))
+results_df <- collate_results(features_df1, features_df2, features_df3, yeoh_label)
+head(results_df)
 
-yeoh_metadata <- data.frame(batch = as.factor(batch_info),
-                            timepoint = timepoint_info)
-# Place adjustment/confounding variables in model.matrix (e.g. age)
-# Do not put batch variables in model.matrix
-# # Put batch variables directly in combat function
-model_combat <- model.matrix(~1, data = yeoh_metadata)
-# Include biological variable of interest as covariate
-# model_combat <- model.matrix(~timepoint, data = yeoh_metadata)
-combat_yeoh <- ComBat(data.matrix(quantile_yeoh), batch_info, model_combat)
+write.table(results_df, "dump/results-scanorama_K20.tsv",
+            quote = F, sep = "\t", row.names = T, col.names = T)
 
-# Replacing negative values with 0
-combat_yeoh[combat_yeoh < 0] <- 0
+# Plot ROC
+# Visualise current results now
+head(results_df)
+labels_vec <- results_df[, 7]
+labels_vec
+par(mar = rep(5,4))
+line_labels <- c("ERM1", "ERM1-Ratio",
+                 "ERM2", "ERM2-Ratio",
+                 "PC1", "PC1-Ratio")
+plot_roc(results_df[,1:6], labels_vec,
+         name_vec = line_labels)
+results_roc <- recordPlot()
 
-# Plot PCA before selecting features
-# Batch information of all the timepoints
-generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-batch_palette <- generate_colour(10)
-batch_colour <- batch_palette[batch_info]
-# Shape of all timepoints
-timepoint_shape <- rep(21:24, c(208,208,42,3))
+save_fig(results_roc, "dump/roc-scanorama_K20.pdf",
+         width = 9, height = 9)
 
-plot.pca_3d(combat_yeoh, batch_colour, timepoint_shape)
-calc.var_composition(combat_yeoh, batch_info, class_info)
-calc.var_preservation(log_yeoh, combat_yeoh)
-rgl.postscript("dump/pca_3d-FSL_classquant_combatCovariate_all_feature_0047_0580_6474.pdf", "pdf")
+# Subtype analysis
+head(results_df)
+head(yeoh_label)
+analysis_df <- cbind(results_df[,c(1,7)],
+                     yeoh_label[rownames(results_df),"subtype", drop = F])
+head(analysis_df[order(analysis_df$erm1),])
 
-# Selecting drug responsive genes between D0 and D8
-ttest_pvalue <- calc_ttest(combat_yeoh[,1:416], 208, is_paired = T)
-combat_d0 <- combat_yeoh[,1:208]
-combat_d8 <- combat_yeoh[,209:416]
-log_fc <- rowMeans(combat_d8) - rowMeans(combat_d0)
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-fc_probesets <- names(log_fc)[log_fc > 1]
-intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(intersect_probesets))
+plot_subtype <- ggplot(analysis_df) +
+  geom_jitter(aes(x = subtype, y = erm1, color = as.factor(label)),
+              position = position_jitter(0.1),
+              show.legend = F) +
+  scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+plot_subtype
+ggsave("dump/subtype_analysis-scanorama_K20.pdf", plot_subtype,
+       width = 8, height = 5)
 
-selected_combat_yeoh <- combat_yeoh[intersect_probesets,]
-# PCA
-pca_obj <- prcomp(t(selected_combat_yeoh))
-# PCA: Eigenvalues
-eig_value <- (pca_obj$sdev)^2
-var_pc <- eig_value[1:5]/sum(eig_value)
-pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+# Load results
+# results_df <- read.table("dump/results-quantile_timepoint_d33_projected_d8.tsv",
+#                          sep = "\t")
+# labels_vec <- results_df[, 7]
+# head(results_df[,1:6])
 
-# PCA: Coordinates
-pca_coord <- pca_obj$x[,1:4]
-# Response df and normal df
-response_df <- pca_coord[1:416, 1:3]
-normal_df <- pca_coord[417:461, 1:3]
+# # Visualise all except subtype: Others
+# head(filtered_subtype_results)
+# labels_vec <- results_df[, 7]
+# labels_vec
+# par(mar = rep(5,4))
+# line_labels <- c("ERM1", "ERM1-Ratio",
+#                  "ERM2", "ERM2-Ratio",
+#                  "PC1", "PC1-Ratio", "MRD33")
+# plot_roc(filtered_subtype_results[,c(1:6,9)], filtered_subtype_results[,7],
+#          name_vec = line_labels, is_bigger_better_vec = c(rep(F,6),T))
+# 
+# results_roc <- recordPlot()
+# save_fig(results_roc, "dump/roc-quantile_timepoint_no_others.pdf",
+#          width = 9, height = 9)
 
-# Calculating ERM distance
-features_df1 <- calc_erm1(response_df, normal_df)
-features_df2 <- calc_erm2(response_df, normal_df)
-features_df3 <- calc_erm3(response_df, normal_df)
-
-# GFS ---------------------------------------------------------------------
-yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
-scaled_yeoh <- norm.mean_scaling(yeoh_combined)
-# Filtering of probesets
-selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
-
-filtered_yeoh <- yeoh_data[selected_probes,]
-
-
-# MILE data
-filtered_mile <- mile_data[selected_probes,]
-# log_mile <- log2_transform(filtered_mile)
-
-### GFS normalisation and selection of probesets
-gfs_yeoh <- norm_gfs(filtered_yeoh)
-
-# plot_tsne <- Rtsne(t(gfs_yeoh), dims = 2, perplexity = 50)
-# names_index <- colnames(gfs_yeoh)
-# batch_info <- yeoh_metadata[names_index,6]
-# batch_palette <- brewer.pal(9, "Set1")
-# batch_colour <- c(batch_palette[batch_info],
-#                   batch_palette[batch_info])
-# plot(plot_tsne$Y, col = batch_colour, pch = rep(c(17,19), each = 210))
-# pca_gfs_yeoh <- plot_pca(gfs_yeoh)
-# ggsave("dump/pca-yeoh_gfs.pdf", pca_gfs_yeoh,
-#        width = 12, height = 8)
-gfs_mile <- norm_gfs(filtered_mile)
-
-# # Selection of probesets according to paired t-test between D0 and D8
-# paired_pvalues <- calc_ttest(gfs_yeoh, 210, is_paired = T)
-# top_probesets <- names(sort(paired_pvalues, na.last = NA))[1:500]
-# select_gfs_yeoh <- gfs_yeoh[top_probesets,]
-
-# Selection of probesets according to unpaired t-test between normal and D0
-d0_normal <- cbind(gfs_yeoh[,1:210], gfs_mile[,751:824])
-# Filtering of new combined df
-selected_probes1 <- filter_probesets(d0_normal, 0.2)
-unpaired_pvalues <- calc_ttest(d0_normal[selected_probes1,], 210, is_paired = F)
-top_probesets <- names(sort(unpaired_pvalues, na.last = NA))[1:500]
-select_gfs_yeoh <- gfs_yeoh[top_probesets,]
-select_gfs_mile <- gfs_mile[top_probesets,]
-
-# # Selection of probesets with most variance
-# probeset_var <- apply(gfs_yeoh, 1, var)
-# top_probesets <- names(sort(probeset_var, decreasing = T)[1:500])
-# select_gfs_yeoh <- gfs_yeoh[top_probesets,]
-
-# plot_select_gfs <- plot_pca(select_gfs_yeoh, yeoh_metadata)
-# plot_select_gfs
-# ggsave("dump/pca-yeoh_gfs_ttest.pdf", plot_select_gfs,
-#        width = 12, height = 4)
-
-# PCA of all data (centroid, training, test)
-pca_obj <- prcomp(t(cbind(select_gfs_yeoh, select_gfs_mile)))
-# Top 3 PCs without batch effects
-pca_arr <- pca_obj$x[,1:3]
-response_df <- pca_arr[1:420,]
-leukemia_df <- pca_arr[421:1170,]
-normal_df <- pca_arr[1171:1244,]
-
-# PCA of D0 and normal data
-basis_data <- t(cbind(select_gfs_yeoh[,1:210], select_gfs_mile[,751:824]))
-rownames(basis_data)
-pca_obj <- prcomp(basis_data)
-pca_basis <- pca_obj$x[,1:4]
-# Projection of D8 and leukemia data
-add_data <- t(cbind(select_gfs_yeoh[,-(1:210)], select_gfs_mile[,-(751:824)]))
-pca_add <- predict(pca_obj, add_data)[,1:4]
-plot_arr <- rbind(pca_basis[1:210,],
-                  pca_add[1:210,],
-                  pca_basis[-(1:210),])
-
-pca_arr <- rbind(pca_basis[1:210, c(1,2,4)],
-                 pca_add[1:210, c(1,2,4)],
-                 pca_basis[-(1:210), c(1,2,4)])
-
-pca_arr <- rbind(pca_basis[1:210, 1:3],
-                 pca_add[1:210, 1:3],
-                 pca_basis[-(1:210), 1:3])
-
-colnames(pca_arr)
-response_df <- pca_arr[1:420,]
-normal_df <- pca_arr[421:494,]
-
-# PCA: Eigenvalues
-eig_value <- (pca_obj$sdev)^2
-var_pc <- eig_value[1:5]/sum(eig_value)
-pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-
-erm <- calc_erm(response_df, normal_df)
-
-# MNN ---------------------------------------------------------------------
-# Splitting up yeoh data into batches
-batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
-batch_list <- lapply(1:10, function(i) log_yeoh[, batch_info == i])
-arr_list <- lapply(batch_list, data.matrix)
-
-colnum_list <- sapply(arr_list, ncol)
-batch_order <- order(colnum_list, decreasing = T)
-print(batch_order)
-
-# Ordered according to number of samples in batch
-mnn_yeoh_obj <- mnnCorrect(arr_list[[2]],
-                           arr_list[[9]],
-                           arr_list[[10]],
-                           arr_list[[8]],
-                           arr_list[[5]],
-                           arr_list[[3]],
-                           arr_list[[1]],
-                           arr_list[[6]],
-                           arr_list[[4]],
-                           arr_list[[7]],
-                           k = 5,
-                           cos.norm.out = F)
-mnn_yeoh <- do.call(cbind, mnn_yeoh_obj$corrected)
-
-# Column names for matrix arranged in above order
-colnames_vec <- unlist(sapply(arr_list[batch_order], colnames))
-colnames(mnn_yeoh) <- colnames_vec
-# Order columns according to name and timepoint
-ordered_mnn_yeoh <- mnn_yeoh[,order(colnames(mnn_yeoh))]
-ordered_mnn_yeoh1 <- cbind(ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "0")],
-                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "8")],
-                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "33")],
-                           ordered_mnn_yeoh[,startsWith(colnames(ordered_mnn_yeoh), "N")])
-# Replace negative values with zero
-ordered_mnn_yeoh1[ordered_mnn_yeoh1 < 0] <- 0
-# ordered_mnn_yeoh1[1:10,1:10]
-
-mnn_d0 <- ordered_mnn_yeoh1[,1:208]
-mnn_d8 <- ordered_mnn_yeoh1[,209:416]
-mnn_d33 <- ordered_mnn_yeoh1[,417:458]
-mnn_normal <- ordered_mnn_yeoh1[,459:461]
-
-# Plot PCA before selecting features
-# Batch information of all the timepoints
-batch_info <- yeoh_batch[colnames(ordered_mnn_yeoh1), "batch"]
-generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-batch_palette <- generate_colour(10)
-batch_colour <- batch_palette[batch_info]
-# Shape of all timepoints
-timepoint_shape <- rep(21:24, c(208,208,42,3))
-plot.pca_3d(ordered_mnn_yeoh1, batch_colour, timepoint_shape)
-calc.var_composition(ordered_mnn_yeoh1, batch_info, class_info)
-calc.var_preservation(log_yeoh, ordered_mnn_yeoh1)
-
-rgl.postscript("dump/pca_3d-FSL_MNN_K5_all_features_0566_0804_7099.pdf", "pdf")
-
-# Selecting drug responsive genes between D0 and D8
-ttest_pvalue <- calc_ttest(cbind(mnn_d0, mnn_d8), 208, is_paired = T)
-log_fc <- rowMeans(mnn_d8) - rowMeans(mnn_d0)
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-fc_probesets <- names(log_fc)[log_fc > 1]
-intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(intersect_probesets))
-
-# Filter and log transform
-selected_mnn_yeoh <- ordered_mnn_yeoh1[intersect_probesets,]
-
-# PCA
-pca_obj <- prcomp(t(selected_mnn_yeoh), center = T, scale. = F)
-# PCA: Eigenvalues
-eig_value <- (pca_obj$sdev)^2
-var_pc <- eig_value[1:5]/sum(eig_value)
-pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-
-# PCA: Coordinates
-pca_coord <- pca_obj$x[,1:4]
-# Response df and normal df
-response_df <- pca_coord[1:416, 1:3]
-normal_df <- pca_coord[417:461, 1:3]
-
-# Calculating ERM distance
-features_df1 <- calc_erm1(response_df, normal_df)
-features_df2 <- calc_erm2(response_df, normal_df)
-features_df3 <- calc_erm3(response_df, normal_df)
-
-# MANUAL ------------------------------------------------------------------
-# Batch information of all the timepoints
-batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
-generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-batch_palette <- generate_colour(10)
-batch_colour <- batch_palette[batch_info]
-# Shape of all timepoints
-timepoint_shape <- rep(21:24, c(208,208,42,3))
-plot.pca_3d(selected_yeoh, batch_colour, timepoint_shape)
-plot.pca_3d(log2_transform(selected_yeoh), batch_colour, timepoint_shape)
-
-timepoint_info <- rep(c("D0","D8","Normal"), c(208,208,45))
-
-table(batch_info, timepoint_info)
-order_batch <- c(10,9,8,7,6,4,3,1,2,5)
-cbc_yeoh <- norm.CBC(log_yeoh, batch_info, timepoint_info, order_batch)
-plot.pca_3d(cbc_yeoh, batch_colour, timepoint_shape)
-# plot.pca_3d(log2_transform(cbc_yeoh), batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-cbc_log_all", "pdf")
-
-calc.var_composition(cbc_yeoh, batch_info, class_info)
-calc.var_preservation(log_yeoh, cbc_yeoh)
-
-colnames(cbc_yeoh)
-# Selecting drug responsive genes between D0 and D8
-ttest_pvalue <- calc_ttest(cbc_yeoh[,1:416], 208, is_paired = T)
-log_fc <- calc_logfc(2^cbc_yeoh[,1:208], 2^cbc_yeoh[,209:416])
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-fc_probesets <- names(log_fc)[log_fc > 1]
-intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(intersect_probesets))
-
-# Selecting drug responsive genes between D0 and D33
-ttest_pvalue <- calc_ttest(cbind(cbc_yeoh[,1:208], cbc_yeoh[,417:461]),
-                           size_a = 208, is_paired = F)
-log_fc <- calc_logfc(2^cbc_yeoh[,1:208], 2^cbc_yeoh[,417:461])
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-fc_probesets <- names(log_fc)[log_fc > 1]
-intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(intersect_probesets))
-
-selected_cbc_yeoh <- cbc_yeoh[intersect_probesets,]
-
-# PCA
-pca_obj <- prcomp(t(selected_cbc_yeoh))
-# PCA: Eigenvalues
-eig_value <- (pca_obj$sdev)^2
-var_pc <- eig_value[1:5]/sum(eig_value)
-pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-
-# PCA: Coordinates
-pca_coord <- pca_obj$x[,1:4]
-# Response df and normal df
-response_df <- pca_coord[1:416, 1:3]
-normal_df <- pca_coord[417:461, 1:3]
-
-# Calculating ERM distance
-features_df1 <- calc_erm1(response_df, normal_df)
-features_df2 <- calc_erm2(response_df, normal_df)
-features_df3 <- calc_erm3(response_df, normal_df)
-
-# ComBat ------------------------------------------------------------------
-yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
-# Mean scaling of data
-scaled_yeoh <- norm.mean_scaling(yeoh_combined)
-# Filtering of probesets
-selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
-selected_yeoh <- scaled_yeoh[selected_probesets,]
-
-# Obtaining batch information of selected_yeoh df
-# Rows of metadata are to be in same order as columns of edata
-batch_info <- yeoh_batch[colnames(selected_yeoh), "batch"]
-yeoh_metadata <- data.frame(batch_info)
-# Place adjustment/confounding variables in model.matrix (e.g. age)
-# Do not put batch variables in model.matrix
-# Put batch variables directly in combat function
-model_combat <- model.matrix(~1, data = yeoh_metadata)
-combat_yeoh <- ComBat(data.matrix(selected_yeoh), batch_info, model_combat)
-# Replacing negative values with 0
-combat_yeoh[combat_yeoh < 0] <- 0
-
-# Plot PCA before selecting features
-# Batch information of all the timepoints
-generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-batch_palette <- generate_colour(10)
-batch_colour <- batch_palette[batch_info]
-# Shape of all timepoints
-timepoint_shape <- rep(21:24, c(208,208,42,3))
-
-plot.pca_3d(combat_yeoh, batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-combat_all_feature.pdf", "pdf")
-plot.pca_3d(log2_transform(combat_yeoh), batch_colour, timepoint_shape)
-
-# Selecting drug responsive genes between D0 and D8
-combat_d0 <- combat_yeoh[,1:208]
-combat_d8 <- combat_yeoh[,209:416]
-ttest_pvalue <- calc_ttest(cbind(combat_d0, combat_d8), 208, is_paired = T)
-log_fc <- calc_logfc(combat_d0, combat_d8)
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
-fc_probesets <- names(log_fc)[log_fc > 1]
-intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(intersect_probesets))
-
-# Filter and log transform
-log_combat_yeoh <- log2_transform(combat_yeoh[intersect_probesets,])
-
-# PCA of D0 and normal data
-basis_data <- t(log_combat_yeoh[, c(1:208, 417:461)])
-rownames(basis_data)
-pca_obj <- prcomp(basis_data)
-# PCA: Coordinates
-pca_basis <- pca_obj$x[,1:4]
-# PCA: Eigenvalues
-eig_value <- (pca_obj$sdev)^2
-var_pc <- eig_value[1:5]/sum(eig_value)
-pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-# Projection of D8 data
-# CHANGE
-add_data <- t(log_combat_yeoh[, 209:416])
-rownames(add_data)
-pca_add <- predict(pca_obj, add_data)[,1:4]
-# Final PCA coordinates
-plot_arr <- rbind(pca_basis[1:208,],
-                  pca_add,
-                  pca_basis[-(1:208),])
-
-# Response df and normal df
-response_df <- plot_arr[1:416, 1:3]
-normal_df <- plot_arr[417:461, 1:3]
-rownames(normal_df)
-
-# Calculating ERM distance
-features_df1 <- calc_erm1(response_df, normal_df)
-features_df2 <- calc_erm2(response_df, normal_df)
-features_df3 <- calc_erm3(response_df, normal_df)
-
-# Hierachical clustering --------------------------------------------------
-pairwise_dist <- dist(t(ordered_mnn_yeoh1[,1:210]))
-hcluster <- hclust(pairwise_dist)
-dendo_obj <- as.dendrogram(hcluster)
-# sample_id <- labels(dendo_obj)
-# nodePar <- list(lab.cex = 0.3, pch = c(NA, NA),
-#                 cex = 0.5, col = "blue")
-
-colnames_data <- colnames(ordered_mnn_yeoh1)[1:210]
-batch_info <- yeoh_metadata[colnames_data, 6]
-batch_palette <- brewer.pal(9, "Set1")
-batch_colour <- batch_palette[batch_info]
-
-# Settings of dendogram
-dendo_obj <- set(dendo_obj, "labels_cex", 0.4)
-plot(dendo_obj, horiz = F)
-colored_bars(batch_colour, dendo_obj,
-             rowLabels = "Batch ", y_shift = -0.15,
-             sort_by_labels_order = F)
-dendogram <- recordPlot()
-save_fig(dendogram, "dump/hclust-mnn_yeoh.pdf",
-         width = 12, height = 6)
+# # Join results_df and yeoh_label
+# merged_results <- merge(results_df, yeoh_label[,c(1,7)], by = "row.names")
+# merged_results <- merged_results[,-c(1)]
+# # Filter out MRD33 missing values
+# filtered_results<- merged_results[!is.na(merged_results$d33_mrd),]
+# # Convert to numeric
+# filtered_results$d33_mrd <- as.numeric(as.character(filtered_results$d33_mrd))
+# # Change NA values (<0.0001) to 5e-5
+# filtered_results$d33_mrd[is.na(filtered_results$d33_mrd)] <- 5e-5
+# # Filter out subtype: Others
+# filtered_subtype_results <- filtered_results[filtered_results$subtype != "Others",]
+# 
+# write.table(filtered_subtype_results, "dump/results_quantile_timepoint_mrd33_no_others.tsv",
+#             quote = F, sep = "\t")
 
 # PCA PLOT ----------------------------------------------------------------
 # Plot PCA-3D
 plot.pca_3d(pca_coord, batch_colour, timepoint_shape, pc_labels)
-rgl.postscript("dump/pca_3d-results-FSL_classquant_combatCovariate_PCA_unscaled_selectfeatures.pdf", "pdf")
+rgl.postscript("dump/pca_3d_selected-scanorama_K20.pdf", "pdf")
 
 # Plot PCA-2D
 # plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
@@ -982,7 +1090,7 @@ vectors_plot <- plot_vectors(as.data.frame(arrows_arr),
                              patient_colour,
                              subtype_colour)
 vectors_plot
-ggsave("dump/vectors-results-FSL_MNN_K5_PCA_unscaled.pdf", vectors_plot,
+ggsave("dump/vectors-scanorama_K20.pdf", vectors_plot,
        width = 12, height = 6)
 
 # # Subtype colours
@@ -1013,90 +1121,28 @@ ggsave("dump/vectors-results-FSL_MNN_K5_PCA_unscaled.pdf", vectors_plot,
 #                   rep(blue_palette[batch_info], 2),
 #                   rep("darkolivegreen3", 74))
 
-# SAVE RESULTS -----------------------------------------------------------------
-### Extracting truth labels and training/test
-features_df <- cbind(features_df1, features_df2, features_df3)
-colnames(features_df) <- c("erm1", "erm1_ratio", "erm2", "erm2_ratio", "erm3", "erm3_ratio")
-row_index <- substring(rownames(features_df),1,4)
-row_index
-labels_yeoh <- yeoh_label[row_index, 5:6]
-results_df <- cbind(features_df, labels_yeoh)
-rownames(results_df) <- row_index
-# results_df[order(results_df$erm),]
-write.table(results_df, "dump/results-FSL_MNN_K5_PCA_unscaled.tsv",
-            quote = F, sep = "\t", row.names = T, col.names = T)
+# Hierachical clustering --------------------------------------------------
+pairwise_dist <- dist(t(ordered_mnn_yeoh1[,1:210]))
+hcluster <- hclust(pairwise_dist)
+dendo_obj <- as.dendrogram(hcluster)
+# sample_id <- labels(dendo_obj)
+# nodePar <- list(lab.cex = 0.3, pch = c(NA, NA),
+#                 cex = 0.5, col = "blue")
 
-# Plot ROC
-# Load results
-# results_df <- read.table("dump/results-quantile_timepoint_d33_projected_d8.tsv",
-#                          sep = "\t")
-# labels_vec <- results_df[, 7]
-# head(results_df[,1:6])
+colnames_data <- colnames(ordered_mnn_yeoh1)[1:210]
+batch_info <- yeoh_metadata[colnames_data, 6]
+batch_palette <- brewer.pal(9, "Set1")
+batch_colour <- batch_palette[batch_info]
 
-# Visualise current results now
-head(results_df)
-labels_vec <- results_df[, 7]
-labels_vec
-par(mar = rep(5,4))
-line_labels <- c("ERM1", "ERM1-Ratio",
-                 "ERM2", "ERM2-Ratio",
-                 "PC1", "PC1-Ratio")
-plot_roc(results_df[,1:6], labels_vec,
-         name_vec = line_labels)
-
-results_roc <- recordPlot()
-save_fig(results_roc, "dump/roc-results-FSL_MNN_K5_PCA_unscaled.pdf",
-         width = 9, height = 9)
-
-# Visualise all except subtype: Others
-head(filtered_subtype_results)
-labels_vec <- results_df[, 7]
-labels_vec
-par(mar = rep(5,4))
-line_labels <- c("ERM1", "ERM1-Ratio",
-                 "ERM2", "ERM2-Ratio",
-                 "PC1", "PC1-Ratio", "MRD33")
-plot_roc(filtered_subtype_results[,c(1:6,9)], filtered_subtype_results[,7],
-         name_vec = line_labels, is_bigger_better_vec = c(rep(F,6),T))
-
-results_roc <- recordPlot()
-save_fig(results_roc, "dump/roc-quantile_timepoint_no_others.pdf",
-         width = 9, height = 9)
-
-View(filtered_subtype_results)
-
-# Subtype analysis
-head(results_df)
-head(yeoh_label)
-analysis_df <- cbind(results_df[,c(1,7)],
-                     yeoh_label[rownames(results_df),"subtype", drop = F])
-head(analysis_df[order(analysis_df$erm1),])
-
-plot_subtype <- ggplot(analysis_df) +
-  geom_jitter(aes(x = subtype, y = erm1, color = as.factor(label)),
-              position = position_jitter(0.1),
-              show.legend = F) +
-  scale_color_manual(values = c("darkolivegreen3", "tomato3"))
-plot_subtype
-ggsave("dump/subtype_analysis.pdf", plot_subtype,
-       width = 8, height = 5)
-
-# Join results_df and yeoh_label
-merged_results <- merge(results_df, yeoh_label[,c(1,7)], by = "row.names")
-merged_results <- merged_results[,-c(1)]
-# Filter out MRD33 missing values
-filtered_results<- merged_results[!is.na(merged_results$d33_mrd),]
-# Convert to numeric
-filtered_results$d33_mrd <- as.numeric(as.character(filtered_results$d33_mrd))
-# Change NA values (<0.0001) to 5e-5
-filtered_results$d33_mrd[is.na(filtered_results$d33_mrd)] <- 5e-5
-# Filter out subtype: Others
-filtered_subtype_results <- filtered_results[filtered_results$subtype != "Others",]
-
-write.table(filtered_subtype_results, "dump/results_quantile_timepoint_mrd33_no_others.tsv",
-            quote = F, sep = "\t")
-
-
+# Settings of dendogram
+dendo_obj <- set(dendo_obj, "labels_cex", 0.4)
+plot(dendo_obj, horiz = F)
+colored_bars(batch_colour, dendo_obj,
+             rowLabels = "Batch ", y_shift = -0.15,
+             sort_by_labels_order = F)
+dendogram <- recordPlot()
+save_fig(dendogram, "dump/hclust-mnn_yeoh.pdf",
+         width = 12, height = 6)
 # MILE: Normal samples ----------------------------------------------------
 # PCA
 plot.pca_batch <- function(untransformed_df, colour_vec, shape_vec = 19) {
@@ -1170,4 +1216,57 @@ log_d8 <- log2_transform(qnorm_d8[intersect_probesets,])
 log_normal <- log2_transform(qnorm_normal[intersect_probesets,])
 log_leukemia <- log2_transform(qnorm_leukemia[intersect_probesets,])
 dim(log_leukemia)
+
+# GFS ---------------------------------------------------------------------
+yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
+scaled_yeoh <- norm.mean_scaling(yeoh_combined)
+# Filtering of probesets
+selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
+
+filtered_yeoh <- yeoh_data[selected_probes,]
+
+# MILE data
+filtered_mile <- mile_data[selected_probes,]
+# log_mile <- log2_transform(filtered_mile)
+
+### GFS normalisation and selection of probesets
+gfs_yeoh <- norm_gfs(filtered_yeoh)
+
+# plot_tsne <- Rtsne(t(gfs_yeoh), dims = 2, perplexity = 50)
+# names_index <- colnames(gfs_yeoh)
+# batch_info <- yeoh_metadata[names_index,6]
+# batch_palette <- brewer.pal(9, "Set1")
+# batch_colour <- c(batch_palette[batch_info],
+#                   batch_palette[batch_info])
+# plot(plot_tsne$Y, col = batch_colour, pch = rep(c(17,19), each = 210))
+# pca_gfs_yeoh <- plot_pca(gfs_yeoh)
+# ggsave("dump/pca-yeoh_gfs.pdf", pca_gfs_yeoh,
+#        width = 12, height = 8)
+gfs_mile <- norm_gfs(filtered_mile)
+
+# # Selection of probesets according to paired t-test between D0 and D8
+# paired_pvalues <- calc_ttest(gfs_yeoh, 210, is_paired = T)
+# top_probesets <- names(sort(paired_pvalues, na.last = NA))[1:500]
+# select_gfs_yeoh <- gfs_yeoh[top_probesets,]
+
+# Selection of probesets according to unpaired t-test between normal and D0
+d0_normal <- cbind(gfs_yeoh[,1:210], gfs_mile[,751:824])
+# Filtering of new combined df
+selected_probes1 <- filter_probesets(d0_normal, 0.2)
+unpaired_pvalues <- calc_ttest(d0_normal[selected_probes1,], 210, is_paired = F)
+top_probesets <- names(sort(unpaired_pvalues, na.last = NA))[1:500]
+select_gfs_yeoh <- gfs_yeoh[top_probesets,]
+select_gfs_mile <- gfs_mile[top_probesets,]
+
+# # Selection of probesets with most variance
+# probeset_var <- apply(gfs_yeoh, 1, var)
+# top_probesets <- names(sort(probeset_var, decreasing = T)[1:500])
+# select_gfs_yeoh <- gfs_yeoh[top_probesets,]
+
+# plot_select_gfs <- plot_pca(select_gfs_yeoh, yeoh_metadata)
+# plot_select_gfs
+# ggsave("dump/pca-yeoh_gfs_ttest.pdf", plot_select_gfs,
+#        width = 12, height = 4)
+
+
 

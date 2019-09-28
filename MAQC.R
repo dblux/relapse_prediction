@@ -11,11 +11,11 @@ theme_set(theme_cowplot())
 plot_batch <- function(df, batch_info, shape_info) {
   batch_factor <- factor(batch_info)
   shape_factor <- factor(shape_info)
-  
   # Principal component analysis
   col_logical <- apply(t(df), 2, sum) != 0 & apply(t(df), 2, var) != 0
   pca_df <- t(df)[, col_logical]
   pca_obj <- prcomp(pca_df, center = T, scale. = T)
+  pca_arr <- pca_obj$x
   # Eigenvalues
   pca_df <- data.frame(pca_arr)
   eig_value <- (pca_obj$sdev)^2
@@ -23,25 +23,25 @@ plot_batch <- function(df, batch_info, shape_info) {
   var_pct <- eig_value/sum(eig_value)
   pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pct[1:5]*100)
 
-  # Argument: PC coordinates for single PC
-  calc.pc_var <- function(vec) {
-    # Argument: ANOVA attributes; Calculates percentage of variance
-    # SS_between/SS_between + SS_within
-    calc.var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
-    pc_metadata <- data.frame(pc = vec,
-                              batch = as.factor(batch_info),
-                              class = as.factor(class_info))
-    batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
-    class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
-    return(c(calc.var_percentage(batch_anova_attr),
-             calc.var_percentage(class_anova_attr)))
-  }
-  var_composition <- sapply(pca_df, calc.pc_var)
-  pca_var_df <- data.frame(var_pct,
-                           batch_pct = var_composition[1,],
-                           class_pct = var_composition[2,])
-  total_batch_pct <- sum(pca_var_df$var_pct * pca_var_df$batch_pct)*100
-  total_class_pct <- sum(pca_var_df$var_pct * pca_var_df$class_pct)*100
+  # # Argument: PC coordinates for single PC
+  # calc.pc_var <- function(vec) {
+  #   # Argument: ANOVA attributes; Calculates percentage of variance
+  #   # SS_between/SS_between + SS_within
+  #   calc.var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
+  #   pc_metadata <- data.frame(pc = vec,
+  #                             batch = as.factor(batch_info),
+  #                             class = as.factor(class_info))
+  #   batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
+  #   class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
+  #   return(c(calc.var_percentage(batch_anova_attr),
+  #            calc.var_percentage(class_anova_attr)))
+  # }
+  # var_composition <- sapply(pca_df, calc.pc_var)
+  # pca_var_df <- data.frame(var_pct,
+  #                          batch_pct = var_composition[1,],
+  #                          class_pct = var_composition[2,])
+  # total_batch_pct <- sum(pca_var_df$var_pct * pca_var_df$batch_pct)*100
+  # total_class_pct <- sum(pca_var_df$var_pct * pca_var_df$class_pct)*100
   
   # PCA scatter plot
   top_pc <- as.data.frame(pca_obj$x[,1:4])
@@ -64,8 +64,8 @@ plot_batch <- function(df, batch_info, shape_info) {
                                           col = batch_factor,
                                           shape = shape_factor)) +
     geom_point(show.legend = F, size = 3) +
-    labs(title = sprintf("BE: %.2f%% \n CV: %.2f%%",
-                         total_batch_pct, total_class_pct)) +
+    # labs(title = sprintf("BE: %.2f%% \n CV: %.2f%%",
+    #                      total_batch_pct, total_class_pct)) +
     theme(axis.text.x = element_text(size = 5, angle = 90, hjust = 1))
   
   # Plot all graphs
@@ -196,11 +196,10 @@ head(maqc_metadata)
 # Place adjustment/confounding variables in model.matrix (e.g. age)
 # Do not put batch variables in model.matrix
 # Put batch variables directly in combat function
-model_combat <- model.matrix(~1, data = maqc_metadata)
+# model_combat <- model.matrix(~1, data = maqc_metadata)
 # Include biological variable of interest as covariate
 model_combat <- model.matrix(~class, data = maqc_metadata)
-# # Include biological variable of interest as covariate
-# model_combat <- model.matrix(~class, data = maqc_metadata)
+
 combat_maqc <- ComBat(data.matrix(log_maqc),
                       batch = maqc_metadata$batch,
                       mod = model_combat)
@@ -277,7 +276,7 @@ head(odd_maqc_metadata, 20)
 # ComBat assumes that data has been normalised and probesets have been filtered
 # Error if probesets are not filtered as rows have 0 variance
 selected_probesets <- filter_probesets(odd_log_maqc, 0.1)
-odd_filtered_maqc <- odd_log_maqc[selected_probesets,]
+odd_filtered_maqc <- odd_maqc[selected_probesets,]
 # Place adjustment/confounding variables in model.matrix (e.g. age)
 # Do not put batch variables in model.matrix
 # Put batch variables directly in combat function
@@ -296,7 +295,7 @@ combat_maqc_df[combat_maqc_df < 0] <- 0
 plot_combat_log_scaled <- plot_batch(combat_maqc_df, odd_batch_info, odd_class_info)
 plot_combat_log_scaled
 
-ggsave("dump/plot_combat_log_scaled_odd.pdf", plot_combat_log_scaled,
+ggsave("dump/plot_FSL_combatCov-odd.pdf", plot_combat_log_scaled,
        width = 6, height = 6)
 
 # CBC
