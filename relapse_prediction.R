@@ -174,7 +174,7 @@ plot_roc <- function(score_list, label_vec,
     format_text <- function(name, auc) sprintf("%s (%.3f)", name, auc)
     legend_text <- mapply(format_text, name_vec, auc_vec)
     legend("bottomright", inset = 0.03, lty = 1, lwd = 2,
-           cex = 1.4, bty = "o", text.width = 0.45,
+           cex = 1.2, bty = "o", text.width = 0.35,
            legend = legend_text, col = color_index)
   }
   return(auc_vec)
@@ -601,7 +601,7 @@ mnn_yeoh_obj <- mnnCorrect(arr_list[[2]],
                            arr_list[[6]],
                            arr_list[[4]],
                            arr_list[[7]],
-                           k = 3,
+                           k = 10,
                            cos.norm.out = F)
 mnn_yeoh <- do.call(cbind, mnn_yeoh_obj$corrected)
 
@@ -609,24 +609,21 @@ mnn_yeoh <- do.call(cbind, mnn_yeoh_obj$corrected)
 colnames_vec <- unlist(sapply(arr_list[batch_order], colnames))
 colnames(mnn_yeoh) <- colnames_vec
 # Order columns according to name and timepoint
-ordered_mnn_yeoh <- mnn_yeoh[,order(colnames(mnn_yeoh))]
-ordered_mnn_yeoh1 <- cbind(ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "0")],
-                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "8")],
-                           ordered_mnn_yeoh[,endsWith(colnames(ordered_mnn_yeoh), "33")],
-                           ordered_mnn_yeoh[,startsWith(colnames(ordered_mnn_yeoh), "N")])
+ordered_mnn_yeoh <- mnn_yeoh[, colnames(log_yeoh)]
+
 # Replace negative values with zero
-ordered_mnn_yeoh1[ordered_mnn_yeoh1 < 0] <- 0
+ordered_mnn_yeoh[ordered_mnn_yeoh < 0] <- 0
 # ordered_mnn_yeoh1[1:10,1:10]
 
 # Plot PCA before selecting features
 # Batch information of all the timepoints
-batch_info <- yeoh_batch[colnames(ordered_mnn_yeoh1), "batch"]
+batch_info <- yeoh_batch[colnames(ordered_mnn_yeoh), "batch"]
 generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
 batch_palette <- generate_colour(10)
 batch_colour <- batch_palette[batch_info]
 # Shape of all timepoints
 timepoint_shape <- rep(21:23, c(208,208,45))
-plot.pca_3d(ordered_mnn_yeoh1, batch_colour, timepoint_shape)
+plot.pca_3d(ordered_mnn_yeoh, batch_colour, timepoint_shape)
 rgl.postscript("dump/pca_3d-MNN_K3.pdf", "pdf")
 
 calc.var_preservation(log_yeoh, ordered_mnn_yeoh1)
@@ -865,7 +862,7 @@ batch_ordered_yeoh <- do.call(cbind, batch_list)
 #             quote = F, sep = "\t", row.names = F, col.names = F)
 # write(rownames(log_yeoh), file = "data/scanorama/yeoh-probesets.txt")
 
-scanorama_yeoh <- read.table("data/scanorama/yeoh-scanorama_k3.tsv",
+scanorama_yeoh <- read.table("data/scanorama/yeoh-scanorama_k20.tsv",
                              sep = "\t", row.names = 1)
 colnames(scanorama_yeoh) <- colnames(batch_ordered_yeoh)
 # Reorder columns according to log_yeoh
@@ -879,8 +876,8 @@ batch_palette <- generate_colour(10)
 batch_colour <- batch_palette[batch_info]
 # Shape of all timepoints
 timepoint_shape <- rep(21:23, c(208,208,45))
-plot.pca_3d(scanorama_maqc*100, batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-scanorama_K3.pdf", "pdf")
+plot.pca_3d(ordered_scanorama*100, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-scanorama_K20.pdf", "pdf")
 
 calc.var_preservation(log_yeoh, ordered_scanorama)
 metrics <- eval.batch_effects(ordered_scanorama, batch_info, class_numeric)
@@ -891,13 +888,16 @@ scanorama_d8 <- ordered_scanorama[,209:416]
 
 # Selecting drug responsive genes between D0 and D8
 ttest_pvalue <- calc_ttest(cbind(scanorama_d0, scanorama_d8), 208, is_paired = T)
-log_fc <- rowMeans(scanorama_d8) - rowMeans(scanorama_d0)
-pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+# bh_qvalue <- p.adjust(ttest_pvalue, method = "BH")
+log_fc <- calc_logfc(scanorama_d0, scanorama_d8)
 fc_probesets <- names(log_fc)[log_fc > 1]
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05]
+length(pvalue_probesets)
 intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
-print(length(fc_probesets))
+print(length(intersect_probesets))
 # Filter and log transform
 corrected_df <- ordered_scanorama[intersect_probesets,]
+
 # ERM CALCULATION ---------------------------------------------------------
 # corrected_df <- selected_quantile_yeoh
 # PCA
@@ -965,20 +965,32 @@ head(results_df)
 write.table(results_df, "dump/results-scanorama_K20.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
+# Process results from all batch correction methods
+results_rpath_vec <- list.files("dump/fig/erm", full.names = T)
+list_results <- lapply(results_rpath_vec, read.table, sep = "\t")
+names(list_results) <- substring(results_rpath_vec, 22)
+# lapply(list_results, rownames)
+
+all_erm <- lapply(list_results, function(df) df[,1])
+# Reorder list of erm vectors
+reordered_erm <- all_erm[c(6,3,2,4,5,1)]
+str(reordered_erm)
+labels_vec <- list_results[[1]][,7]
+names(list_results)
 # Plot ROC
 # Visualise current results now
 head(results_df)
 labels_vec <- results_df[, 7]
 labels_vec
 par(mar = rep(5,4))
-line_labels <- c("ERM1", "ERM1-Ratio",
-                 "ERM2", "ERM2-Ratio",
-                 "PC1", "PC1-Ratio")
-plot_roc(results_df[,1:6], labels_vec,
+line_labels <- c("Quantile", "CS-Quantile",
+                 "ComBat", "Harman",
+                 "MNN [k=3]", "BCM")
+plot_roc(reordered_erm, labels_vec,
          name_vec = line_labels)
 results_roc <- recordPlot()
 
-save_fig(results_roc, "dump/roc-scanorama_K20.pdf",
+save_fig(results_roc, "dump/roc-results.pdf",
          width = 9, height = 9)
 
 # Subtype analysis
@@ -1268,5 +1280,62 @@ select_gfs_mile <- gfs_mile[top_probesets,]
 # ggsave("dump/pca-yeoh_gfs_ttest.pdf", plot_select_gfs,
 #        width = 12, height = 4)
 
+# QPSP --------------------------------------------------------------------
+library(NetProt)
+library(genefilter)
 
+# Import CORUM df
+raw_corum <- read.table("../info/CORUM/entrezId1.txt",
+                        sep = "\t", header = T, row.names = 1, stringsAsFactors = F)
+# Only human complexes
+human_corum <- raw_corum[raw_corum$Organism == "Human",]
+list_corum <- strsplit(human_corum[,2], ';')
+names(list_corum) <- rownames(human_corum)
+head(list_corum)
+
+#' Removes ambiguous and AFFY probesets from dataframe
+#' Rowname of affymetrix probesets
+remove_probesets <- function(df) {
+  logical_vec <- grepl("[0-9]_at", rownames(df)) & !startsWith(rownames(df), "AFFX")
+  print(paste0("No. of ambiguous and AFFY probesets removed: ",
+               nrow(df) - sum(logical_vec)))
+  return(df[logical_vec, , drop=F])
+}
+processed_yeoh <- remove_probesets(log_yeoh)
+
+# Map probesets to IDs
+# Removes ambiguous probesets and probesets with no ID
+# Selects maximum if two probesets match to same gene
+# CHECK: What microarray platform is the data from?
+ANNOT_PROBESET_RPATH <- "../info/microarray/HG-U133A/annot_entrez-GPL96.tsv"
+entrez_yeoh <- affy2id(processed_yeoh, ANNOT_PROBESET_RPATH)
+
+gfs_yeoh <- norm.gfs(entrez_yeoh, upper = 0.1, lower = 0.2, num_intervals = 4)
+
+# QPSP
+calc.qpsp <- function (rank_weight_matrix, complex_list) {
+  qpsp_matrix <- c()
+  for (j in 1:length(complex_list)) {
+    if (length(rownames(rank_weight_matrix)[which(rownames(rank_weight_matrix) %in% 
+                                                  complex_list[[j]])]) > 1) {
+      qpsp_matrix <- rbind(qpsp_matrix, colSums(rank_weight_matrix[rownames(rank_weight_matrix)[which(rownames(rank_weight_matrix) %in% 
+                                                                                                        complex_list[[j]])], ]))
+    }
+    else if (length(rownames(rank_weight_matrix)[which(rownames(rank_weight_matrix) %in% 
+                                                       complex_list[[j]])]) == 1) {
+      qpsp_matrix <- rbind(qpsp_matrix, rank_weight_matrix[rownames(rank_weight_matrix)[which(rownames(rank_weight_matrix) %in% 
+                                                                                                complex_list[[j]])], ])
+    }
+    else {
+      qpsp_matrix <- rbind(qpsp_matrix, c(rep(0, ncol(rank_weight_matrix))))
+    }
+  }
+  rownames(qpsp_matrix) <- names(complex_list)
+  return(qpsp_matrix)
+}
+
+calc.qpsp <- function()
+
+qpsp_yeoh <- calc.qpsp(gfs_yeoh, list_corum)
+qpsp_yeoh[,1:5]
 

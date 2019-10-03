@@ -1,9 +1,9 @@
 library(reshape2)
 library(ggplot2)
 library(cowplot)
-# library(scran)
+library(scran)
 library(sva)
-# library(Harman)
+library(Harman)
 source("../functions.R")
 source("class_batch_correction.R")
 theme_set(theme_cowplot())
@@ -47,6 +47,7 @@ plot_batch <- function(df, batch_info, shape_info) {
   top_pc <- as.data.frame(pca_obj$x[,1:4])
   pc1_pc2 <- ggplot(top_pc, aes(x = PC1, y = PC2, col = batch_factor, shape = shape_factor)) +
     geom_point(size = 3, show.legend = F) +
+    # scale_shape_manual(values=c(19,17)) +
     labs(x = pc_labels[1], y = pc_labels[2])
   
   pc3_pc4 <- ggplot(top_pc, aes(x = PC3, y = PC4, col = batch_factor, shape = shape_factor)) +
@@ -92,6 +93,7 @@ plot_pca <- function(df, batch_info) {
 # IMPORT DATA -------------------------------------------------------------
 raw_maqc <- read.table("../diff_expr/data/MAQC-I/processed/mas5_original-ref.tsv",
                        sep = "\t", header = T, row.names = 1)
+
 filtered_maqc <- raw_maqc[filter_probesets(raw_maqc, 0.1),]
 scaled_maqc <- norm.mean_scaling(filtered_maqc)
 log_maqc <- log2_transform(scaled_maqc)
@@ -132,7 +134,7 @@ class_info <- rep(rep(1:2, each = 5), 6)
 
 # MNN
 # Split dataframe according to batch info
-list_df <- split.default(log_maqc, batch_info)
+list_df <- split.default(filtered_maqc, batch_info)
 # Convert df to arr
 list_arr <- lapply(list_df, data.matrix)
 list_args <- c(list_arr, k = 5, cos.norm.out = F)
@@ -200,7 +202,7 @@ head(maqc_metadata)
 # Include biological variable of interest as covariate
 model_combat <- model.matrix(~class, data = maqc_metadata)
 
-combat_maqc <- ComBat(data.matrix(log_maqc),
+combat_maqc <- ComBat(data.matrix(filtered_maqc),
                       batch = maqc_metadata$batch,
                       mod = model_combat)
 combat_maqc_df <- data.frame(combat_maqc)
@@ -264,6 +266,10 @@ odd_maqc <- log_maqc[,selection_index]
 odd_batch_info <- rep(1:6, c(10,9,9,8,8,7))
 odd_class_info <- substring(colnames(odd_maqc), 7, 7)
 
+pca_plot <- plot_batch(odd_maqc, odd_batch_info, odd_class_info)
+ggsave("dump/pca_odd_maqc-uncorrected.pdf", pca_plot,
+       width = 8, height = 4)
+
 # ComBat
 # Creation of pData dataframe (metadata)
 class <- as.factor(odd_class_info)
@@ -275,17 +281,17 @@ head(odd_maqc_metadata, 20)
 
 # ComBat assumes that data has been normalised and probesets have been filtered
 # Error if probesets are not filtered as rows have 0 variance
-selected_probesets <- filter_probesets(odd_log_maqc, 0.1)
-odd_filtered_maqc <- odd_maqc[selected_probesets,]
+
 # Place adjustment/confounding variables in model.matrix (e.g. age)
 # Do not put batch variables in model.matrix
 # Put batch variables directly in combat function
-# # Only include intercept term in design matrix
-# model_combat <- model.matrix(~1, data = maqc_metadata)
-# Include biological variable of interest as covariate
-model_combat <- model.matrix(~class, data = odd_maqc_metadata)
+# Only include intercept term in design matrix
+model_combat <- model.matrix(~1, data = odd_maqc_metadata)
 
-combat_maqc <- ComBat(data.matrix(odd_filtered_maqc),
+# # Include biological variable of interest as covariate
+# model_combat <- model.matrix(~class, data = odd_maqc_metadata)
+
+combat_maqc <- ComBat(data.matrix(odd_maqc),
                       batch = odd_maqc_metadata$batch,
                       mod = model_combat)
 combat_maqc_df <- data.frame(combat_maqc)
@@ -295,56 +301,58 @@ combat_maqc_df[combat_maqc_df < 0] <- 0
 plot_combat_log_scaled <- plot_batch(combat_maqc_df, odd_batch_info, odd_class_info)
 plot_combat_log_scaled
 
-ggsave("dump/plot_FSL_combatCov-odd.pdf", plot_combat_log_scaled,
-       width = 6, height = 6)
+ggsave("dump/pca_odd_maqc-combat_i.pdf", plot_combat_log_scaled,
+       width = 8, height = 4)
+
 
 # CBC
-scaled_maqc <- norm.mean_scaling(odd_maqc)
-log_maqc <- log2_transform(scaled_maqc)
-cbc_maqc <- norm.CBC(log_maqc, odd_batch_info, odd_class_info, 1:6)
+cbc_maqc <- norm.CBC(odd_maqc, odd_batch_info, odd_class_info, 1:6)
 plot_cbc <- plot_batch(cbc_maqc, odd_batch_info, odd_class_info)
-ggsave("dump/plot_cbc_log_scaled_odd.pdf", plot_cbc,
-       width = 6, height = 6)
+plot_cbc
+ggsave("dump/pca_odd_maqc-bcm.pdf", plot_cbc,
+       width = 8, height = 4)
 
 # Harman
-harman_obj <- harman(odd_log_maqc, odd_class_info, odd_batch_info, limit = 0.95)
+harman_obj <- harman(odd_maqc, odd_class_info, odd_batch_info, limit = 0.95)
 harman_maqc <- data.frame(reconstructData(harman_obj))
+# Replace negative values with 0
+harman_maqc[harman_maqc < 0] <- 0
 
 plot_harman_odd <- plot_batch(harman_maqc, odd_batch_info, odd_class_info)
 plot_harman_odd
-ggsave("dump/plot_harman_odd.pdf", plot_harman_odd,
-       width = 6, height = 6)
+ggsave("dump/pca_odd_maqc-harman.pdf", plot_harman_odd,
+       width = 8, height = 4)
 
 # Scanorama
 # Write log_maqc for numpy array
 write.table(odd_log_maqc, "data/scanorama/odd_log_maqc.tsv",
             quote = F, sep = "\t", row.names = F, col.names = F)
 # Read scanorama corrected data
-scanorama_maqc_odd <- read.table("data/scanorama/scanorama_data_odd_k5.tsv",
+scanorama_maqc_odd <- read.table("data/scanorama/maqc/scanorama_data_odd.tsv",
                                  sep = "\t", row.names = 1)
 colnames(scanorama_maqc_odd) <- colnames(odd_maqc)
 plot_scanorama_odd <- plot_batch(scanorama_maqc_odd,
                                  odd_batch_info, odd_class_info)
 plot_scanorama_odd
-ggsave("dump/plot_scanorama_odd_k5.pdf", plot_scanorama_odd,
-       width = 6, height = 6)
+ggsave("dump/pca_odd_maqc-scanorma_k20.pdf", plot_scanorama_odd,
+       width = 8, height = 4)
 
 # MNN
-list_small_df <- split.default(odd_log_maqc, odd_batch_info)
+list_small_df <- split.default(odd_maqc, odd_batch_info)
 list_small_arr <- lapply(list_small_df, data.matrix)
 
-list_args <- c(list_small_arr, k = 3)
+list_args <- c(list_small_arr, k = 7)
 mnn_maqc_obj <- do.call(mnnCorrect, list_args)
 
 mnn_maqc_odd <- do.call(cbind, mnn_maqc_obj$corrected)
 # Column names for matrix arranged in above order
-colnames(mnn_maqc_odd) <- colnames(odd_log_maqc)
-plot_mnn_odd_k5 <- plot_batch(data.frame(mnn_maqc_odd),
+colnames(mnn_maqc_odd) <- colnames(odd_maqc)
+plot_mnn_odd_k7 <- plot_batch(data.frame(mnn_maqc_odd),
                               odd_batch_info, odd_class_info)
-plot_mnn_odd_k5
+plot_mnn_odd_k7
 
-ggsave("dump/plot_mnn_odd_k5.pdf", plot_mnn_odd_k5,
-       width = 6, height = 6)
+ggsave("dump/pca_odd_maqc-mnn_k7.pdf", plot_mnn_odd_k7,
+       width = 8, height = 4)
 
 # SMALL DATASET -----------------------------------------------------------
 small_index <- 1:3 + rep(seq(0,55,5), each = 3)
