@@ -707,6 +707,18 @@ gotzero <- plot_batch(x, batch_info, class_info)
 nozero
 gotzero
 
+correction_vectors <- read.table("dump/correction_log_maqc.tsv", sep = "\t")
+head(correction_vectors)
+
+# Calculate angle between vectors
+cos_sim <- calc.cos_sim(correction_vectors$A, correction_vectors$B)
+calc.rad2degree(acos(cos_sim))
+
+hist(correction_vectors$A, breaks = 30)
+hist(correction_vectors$B, breaks = 30)
+
+plot(correction_vectors$A, correction_vectors$B)
+
 # EVALUATION --------------------------------------------------------------
 filtered_maqc <- raw_maqc[filter_probesets(raw_maqc, 0.1),]
 scaled_maqc <- norm.mean_scaling(filtered_maqc)

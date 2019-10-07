@@ -962,7 +962,7 @@ collate_results <- function(features_df1, features_df2, features_df3, yeoh_label
 results_df <- collate_results(features_df1, features_df2, features_df3, yeoh_label)
 head(results_df)
 
-write.table(results_df, "dump/results-scanorama_K20.tsv",
+write.table(results_df, "dump/results-qpsp2.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
 # Process results from all batch correction methods
@@ -983,15 +983,40 @@ head(results_df)
 labels_vec <- results_df[, 7]
 labels_vec
 par(mar = rep(5,4))
-line_labels <- c("Quantile", "CS-Quantile",
-                 "ComBat", "Harman",
-                 "MNN [k=3]", "BCM")
-plot_roc(reordered_erm, labels_vec,
+line_labels <- c("ERM1", "ERM1-Ratio",
+                 "ERM2", "ERM2-Ratio",
+                 "PC1", "PC1-Ratio")
+plot_roc(results_df[,1:6], labels_vec,
          name_vec = line_labels)
 results_roc <- recordPlot()
 
-save_fig(results_roc, "dump/roc-results.pdf",
+save_fig(results_roc, "dump/roc-qpsp2.pdf",
          width = 9, height = 9)
+
+# # Process results from all batch correction methods
+# results_rpath_vec <- list.files("dump/fig/erm", full.names = T)
+# list_results <- lapply(results_rpath_vec, read.table, sep = "\t")
+# names(list_results) <- substring(results_rpath_vec, 22)
+# # lapply(list_results, rownames)
+# 
+# all_erm <- lapply(list_results, function(df) df[,1])
+# # Reorder list of erm vectors
+# reordered_erm <- all_erm[c(6,3,2,4,5,1)]
+# str(reordered_erm)
+# labels_vec <- list_results[[1]][,7]
+# names(list_results)
+# # Plot ROC
+# # Visualise current results now
+# head(results_df)
+# labels_vec <- results_df[, 7]
+# labels_vec
+# par(mar = rep(5,4))
+# line_labels <- c("Quantile", "CS-Quantile",
+#                  "ComBat", "Harman",
+#                  "MNN [k=3]", "BCM")
+# plot_roc(results_df[,1:6], labels_vec,
+#          name_vec = line_labels)
+# results_roc <- recordPlot()
 
 # Subtype analysis
 head(results_df)
@@ -1006,7 +1031,7 @@ plot_subtype <- ggplot(analysis_df) +
               show.legend = F) +
   scale_color_manual(values = c("darkolivegreen3", "tomato3"))
 plot_subtype
-ggsave("dump/subtype_analysis-scanorama_K20.pdf", plot_subtype,
+ggsave("dump/subtype_analysis-qpsp2.pdf", plot_subtype,
        width = 8, height = 5)
 
 # Load results
@@ -1048,7 +1073,7 @@ ggsave("dump/subtype_analysis-scanorama_K20.pdf", plot_subtype,
 # PCA PLOT ----------------------------------------------------------------
 # Plot PCA-3D
 plot.pca_3d(pca_coord, batch_colour, timepoint_shape, pc_labels)
-rgl.postscript("dump/pca_3d_selected-scanorama_K20.pdf", "pdf")
+rgl.postscript("dump/pca_3d_selected-qpsp2.pdf", "pdf")
 
 # Plot PCA-2D
 # plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
@@ -1102,7 +1127,7 @@ vectors_plot <- plot_vectors(as.data.frame(arrows_arr),
                              patient_colour,
                              subtype_colour)
 vectors_plot
-ggsave("dump/vectors-scanorama_K20.pdf", vectors_plot,
+ggsave("dump/vectors-qpsp2.pdf", vectors_plot,
        width = 12, height = 6)
 
 # # Subtype colours
@@ -1285,7 +1310,7 @@ library(NetProt)
 library(genefilter)
 
 # Import CORUM df
-raw_corum <- read.table("../info/CORUM/entrezId1.txt",
+raw_corum <- read.table("../info/CORUM/entrezId.txt",
                         sep = "\t", header = T, row.names = 1, stringsAsFactors = F)
 # Only human complexes
 human_corum <- raw_corum[raw_corum$Organism == "Human",]
@@ -1334,8 +1359,46 @@ calc.qpsp <- function (rank_weight_matrix, complex_list) {
   return(qpsp_matrix)
 }
 
-calc.qpsp <- function()
+#' Rownames of df has to be the same annotation type as list of protein complexes
+calc.qpsp1 <- function(df, list_complex) {
+  # Filter out protein complexes with proteins that are not measured in df
+  df_proteins <- rownames(df)
+  # Logvec of whether entire complex is present
+  complex_logvec <- sapply(list_complex, function(proteins_vec) all(proteins_vec %in% df_proteins))
+  # Check for any NA in complex_logvec
+  if (anyNA(complex_logvec)) stop("NA present in logvec")
+  sublist_complex <- list_complex[complex_logvec]
+  
+  # Driver function that takes calculates QPSP profile for single sample
+  # @param col_vec Column vector representing GFS-transformed single sample
+  calc.qpsp_profile <- function(col_vec) {
+    sapply(sublist_complex, function(proteins_vec) mean(col_vec[proteins_vec]))
+  }
+  return(apply(df, 2, calc.qpsp_profile))
+}
 
-qpsp_yeoh <- calc.qpsp(gfs_yeoh, list_corum)
+
+qpsp_yeoh <- calc.qpsp1(gfs_yeoh, list_corum)
 qpsp_yeoh[,1:5]
+length(list_corum)
 
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+batch_info <- yeoh_batch[colnames(qpsp_yeoh), "batch"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+batch_palette <- generate_colour(10)
+batch_colour <- batch_palette[batch_info]
+# Shape of all timepoints
+timepoint_shape <- rep(21:23, c(208,208,45))
+plot.pca_3d(qpsp_yeoh, batch_colour, timepoint_shape)
+rgl.postscript("dump/pca_3d-qpsp2.pdf", "pdf")
+
+# Selecting drug responsive genes between D0 and D8
+ttest_pvalue <- calc_ttest(qpsp_yeoh[,1:416], 208, is_paired = T)
+# log_fc <- rowMeans(quantile_d8) - rowMeans(quantile_d0)
+pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05 & !is.nan(ttest_pvalue)]
+# intersect_probesets <- fc_probesets[fc_probesets %in% pvalue_probesets]
+print(length(pvalue_probesets))
+selected_qpsp_yeoh <- qpsp_yeoh[pvalue_probesets,]
+
+corrected_df <- selected_qpsp_yeoh
