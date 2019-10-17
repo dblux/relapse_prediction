@@ -99,6 +99,8 @@ calc_erm1 <- function(response_df, normal_df, leukemia_df = NA, flag = "replace"
   d0normal_vec_vstack <- normal_centroid - t(response_df[1:num_patients,])
   d0normal_scalar_proj <- colSums(d0normal_vec_vstack * unit_leukemia_normal)
   erm_ratio <- erm/d0normal_scalar_proj
+  print(tail(names(erm)))
+  print(tail(names(erm_ratio)))
   return(cbind(erm, erm_ratio))
 }
 
@@ -120,6 +122,8 @@ calc_erm2 <- function(response_df, normal_df, leukemia_df = NA) {
   # Element-wise multiplication of two df
   erm <- colSums(t(d0d8_hstack) * unit_d0normal_vstack)
   erm_ratio <- erm/l2norm_d0normal
+  print(tail(names(erm)))
+  print(tail(names(erm_ratio)))
   return(cbind(erm, erm_ratio))
 }
 
@@ -130,7 +134,34 @@ calc_erm3 <- function(response_df, normal_df) {
   normal_pc1 <- normal_df[,1]
   d0d8_pc1 <- response_pc1[-(1:num_patient)] - response_pc1[1:num_patient]
   d0normal_pc1 <- median(normal_pc1) - response_pc1[1:num_patient]
+  print(tail(names(d0d8_pc1)))
+  print(tail(names(d0d8_pc1/d0normal_pc1)))
   return(cbind(erm = d0d8_pc1, erm_ratio = d0d8_pc1/d0normal_pc1))
+}
+
+
+# Calculates l2norm of D0D8 vector
+# Calculates l2norm(D8) - l2norm(D0)
+calc_erm4 <- function(response_df) {
+  num_patient <- nrow(response_df)/2
+  d0_df <- response_df[1:num_patient,]
+  d8_df <- response_df[-(1:num_patient),]
+  
+  stopifnot(nrow(d8_df) == nrow(d0_df))
+  d0d8_df <- d8_df - d0_df
+  d0d8_l2norm <- apply(d0d8_df, 1, calc.l2_norm)
+  
+  d0_l2norm <- apply(d0_df, 1, calc.l2_norm)
+  d8_l2norm <- apply(d8_df, 1, calc.l2_norm)
+  diff_l2norm <- d8_l2norm - d0_l2norm
+  
+  # Angle between D0 and D8
+  cos_similarity <- mapply(calc.cos_sim, data.frame(t(d0_df)), data.frame(t(d8_df)))
+  angle_d0d8 <- calc.rad2degree(acos(cos_similarity))
+  print(tail(names(d0d8_l2norm)))
+  print(tail(names(diff_l2norm)))
+  print(tail(names(angle_d0d8)))
+  return(data.frame(d0d8_l2norm, diff_l2norm, angle_d0d8))
 }
 
 # Plots ROC and calculates AUC in a primitive fashion (i.e. ROC is step function)
@@ -312,10 +343,6 @@ plot_vectors <- function(df, centroid_df, pc_labels, batch_colour, subtype_colou
   return(multiplot)
 }
 
-calc.var_preservation <- function(df_bef, df_aft) {
-  return(sum(apply(df_aft, 1, var))/sum(apply(df_bef, 1, var)))
-}
-
 # IMPORT DATA -------------------------------------------------------------
 yeoh_d0d8 <- read.table("data/GSE67684/processed/mas5_ordered.tsv",
                         sep = "\t", header = T, row.names = 1)
@@ -357,6 +384,8 @@ log_yeoh <- log2_transform(filtered_yeoh)
 batch_info <- yeoh_batch[colnames(log_yeoh), "batch"]
 class_info <- rep(c("D0","D8","N"), c(208,208,45))
 class_numeric <- rep(1:3, c(208,208,45))
+
+xtable(table(batch_info, class_info))
 
 # # Plot PCA before selecting features
 # # Batch information of all the timepoints
@@ -649,6 +678,13 @@ table(batch_info, timepoint_info)
 order_batch <- c(10,9,8,7,6,4,3,1,2,5)
 cbc_yeoh <- norm.CBC(log_yeoh, batch_info, timepoint_info, order_batch)
 
+
+quantile_d0 <- norm.quantile(log_yeoh[, 1:208])
+quantile_d8 <- norm.quantile(log_yeoh[, 209:416])
+quantile_normal <- norm.quantile(log_yeoh[, 417:461])
+quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_normal)
+cbc_yeoh <- norm.BCM(quantile_yeoh, batch_info, timepoint_info, 2)
+
 # Batch information of all the timepoints
 batch_info <- yeoh_batch[colnames(cbc_yeoh), "batch"]
 generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
@@ -658,7 +694,7 @@ batch_colour <- batch_palette[batch_info]
 timepoint_shape <- rep(21:23, c(208,208,45))
 
 plot.pca_3d(cbc_yeoh, batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-bcm.pdf", "pdf")
+rgl.postscript("dump/pca_3d-bcm_ref.pdf", "pdf")
 
 calc.var_preservation(log_yeoh, cbc_yeoh)
 metrics <- eval.batch_effects(cbc_yeoh, batch_info, class_numeric)
@@ -862,7 +898,7 @@ batch_ordered_yeoh <- do.call(cbind, batch_list)
 #             quote = F, sep = "\t", row.names = F, col.names = F)
 # write(rownames(log_yeoh), file = "data/scanorama/yeoh-probesets.txt")
 
-scanorama_yeoh <- read.table("data/scanorama/yeoh-scanorama_k20.tsv",
+scanorama_yeoh <- read.table("data/scanorama/yeoh-scanorama_k10.tsv",
                              sep = "\t", row.names = 1)
 colnames(scanorama_yeoh) <- colnames(batch_ordered_yeoh)
 # Reorder columns according to log_yeoh
@@ -917,6 +953,7 @@ normal_df <- pca_coord[417:461, 1:3]
 features_df1 <- calc_erm1(response_df, normal_df)
 features_df2 <- calc_erm2(response_df, normal_df)
 features_df3 <- calc_erm3(response_df, normal_df)
+features_df4 <- calc_erm4(response_df)
 
 # # PCA basis: D0 and normal
 # transposed_df <- t(cbind(log_d0, log_d33, log_normal))
@@ -949,9 +986,12 @@ features_df3 <- calc_erm3(response_df, normal_df)
 
 # SAVE RESULTS -----------------------------------------------------------------
 ### Extracting truth labels and training/test
-collate_results <- function(features_df1, features_df2, features_df3, yeoh_label) {
-  features_df <- cbind(features_df1, features_df2, features_df3)
-  colnames(features_df) <- c("erm1", "erm1_ratio", "erm2", "erm2_ratio", "erm3", "erm3_ratio")
+collate_results <- function(features_df1, features_df2, features_df3, features_df4, yeoh_label) {
+  features_df <- cbind(features_df1, features_df2, features_df3, features_df4)
+  colnames(features_df) <- c("erm1", "erm1_ratio",
+                             "erm2", "erm2_ratio",
+                             "erm3", "erm3_ratio",
+                             "d0d8_l2norm", "diff_l2norm","angle_d0d8")
   row_index <- substring(rownames(features_df),1,4)
   labels_yeoh <- yeoh_label[row_index, 5:6]
   results_df <- cbind(features_df, labels_yeoh)
@@ -959,38 +999,45 @@ collate_results <- function(features_df1, features_df2, features_df3, yeoh_label
   return(results_df)
 }
 
-results_df <- collate_results(features_df1, features_df2, features_df3, yeoh_label)
+results_df <- collate_results(features_df1, features_df2, features_df3, features_df4, yeoh_label)
 head(results_df)
 
-write.table(results_df, "dump/results-qpsp2.tsv",
+write.table(results_df, "dump/results-quantile_angle.tsv",
             quote = F, sep = "\t", row.names = T, col.names = T)
 
-# Process results from all batch correction methods
-results_rpath_vec <- list.files("dump/fig/erm", full.names = T)
-list_results <- lapply(results_rpath_vec, read.table, sep = "\t")
-names(list_results) <- substring(results_rpath_vec, 22)
-# lapply(list_results, rownames)
 
-all_erm <- lapply(list_results, function(df) df[,1])
-# Reorder list of erm vectors
-reordered_erm <- all_erm[c(6,3,2,4,5,1)]
-str(reordered_erm)
-labels_vec <- list_results[[1]][,7]
-names(list_results)
+
+# # Process results from all batch correction methods
+# results_rpath_vec <- list.files("dump/fig/erm", full.names = T)
+# list_results <- lapply(results_rpath_vec, read.table, sep = "\t")
+# names(list_results) <- substring(results_rpath_vec, 22)
+# # lapply(list_results, rownames)
+# 
+# all_erm <- lapply(list_results, function(df) df[,1])
+# # Reorder list of erm vectors
+# reordered_erm <- all_erm[c(6,3,2,4,5,1)]
+# str(reordered_erm)
+# labels_vec <- list_results[[1]][,7]
+# names(list_results)
+
 # Plot ROC
 # Visualise current results now
 head(results_df)
-labels_vec <- results_df[, 7]
+labels_vec <- results_df[, 9]
 labels_vec
 par(mar = rep(5,4))
 line_labels <- c("ERM1", "ERM1-Ratio",
                  "ERM2", "ERM2-Ratio",
-                 "PC1", "PC1-Ratio")
-plot_roc(results_df[,1:6], labels_vec,
+                 "PC1", "PC1-Ratio",
+                 "D0D8 L2 Norm", "||D8||-||D0||")
+# line_labels <- c("Quantile", "CS-Quantile",
+#                  "ComBat", "Harman",
+#                  "MNN [k=3]", "BCM")
+plot_roc(results_df[,1:8], labels_vec,
          name_vec = line_labels)
 results_roc <- recordPlot()
 
-save_fig(results_roc, "dump/roc-qpsp2.pdf",
+save_fig(results_roc, "dump/roc-qpsp_nea.pdf",
          width = 9, height = 9)
 
 # # Process results from all batch correction methods
@@ -1021,17 +1068,17 @@ save_fig(results_roc, "dump/roc-qpsp2.pdf",
 # Subtype analysis
 head(results_df)
 head(yeoh_label)
-analysis_df <- cbind(results_df[,c(1,7)],
+analysis_df <- cbind(results_df[,c(1,9)],
                      yeoh_label[rownames(results_df),"subtype", drop = F])
-head(analysis_df[order(analysis_df$erm1),])
 
 plot_subtype <- ggplot(analysis_df) +
-  geom_jitter(aes(x = subtype, y = erm1, color = as.factor(label)),
+  geom_jitter(aes(x = subtype, y = d0d8_l2norm, color = as.factor(label)),
               position = position_jitter(0.1),
               show.legend = F) +
   scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+
 plot_subtype
-ggsave("dump/subtype_analysis-qpsp2.pdf", plot_subtype,
+ggsave("dump/subtype_analysis-qpsp_nea.pdf", plot_subtype,
        width = 8, height = 5)
 
 # Load results
@@ -1073,7 +1120,7 @@ ggsave("dump/subtype_analysis-qpsp2.pdf", plot_subtype,
 # PCA PLOT ----------------------------------------------------------------
 # Plot PCA-3D
 plot.pca_3d(pca_coord, batch_colour, timepoint_shape, pc_labels)
-rgl.postscript("dump/pca_3d_selected-qpsp2.pdf", "pdf")
+rgl.postscript("dump/pca_3d_selected-bcm_ref.pdf", "pdf")
 
 # Plot PCA-2D
 # plot_pca <- pca_all(as.data.frame(plot_arr), batch_colour,
@@ -1127,7 +1174,7 @@ vectors_plot <- plot_vectors(as.data.frame(arrows_arr),
                              patient_colour,
                              subtype_colour)
 vectors_plot
-ggsave("dump/vectors-qpsp2.pdf", vectors_plot,
+ggsave("dump/vectors-qpsp_ref.pdf", vectors_plot,
        width = 12, height = 6)
 
 # # Subtype colours
@@ -1318,6 +1365,11 @@ list_corum <- strsplit(human_corum[,2], ';')
 names(list_corum) <- rownames(human_corum)
 head(list_corum)
 
+# Import NEA
+nea_df <- read.table("../diff_expr/data/subnetwork/nea-hsa/ovarian_cancer/geneset-nea_kegg_ovarian.tsv",
+                     sep = "\t", header = T, stringsAsFactors = F)
+subnetwork_nea <- split(as.character(nea_df$gene_id), nea_df$subnetwork_id)
+
 #' Removes ambiguous and AFFY probesets from dataframe
 #' Rowname of affymetrix probesets
 remove_probesets <- function(df) {
@@ -1326,6 +1378,7 @@ remove_probesets <- function(df) {
                nrow(df) - sum(logical_vec)))
   return(df[logical_vec, , drop=F])
 }
+
 processed_yeoh <- remove_probesets(log_yeoh)
 
 # Map probesets to IDs
@@ -1365,6 +1418,7 @@ calc.qpsp1 <- function(df, list_complex) {
   df_proteins <- rownames(df)
   # Logvec of whether entire complex is present
   complex_logvec <- sapply(list_complex, function(proteins_vec) all(proteins_vec %in% df_proteins))
+  print(sum(complex_logvec))
   # Check for any NA in complex_logvec
   if (anyNA(complex_logvec)) stop("NA present in logvec")
   sublist_complex <- list_complex[complex_logvec]
@@ -1377,10 +1431,11 @@ calc.qpsp1 <- function(df, list_complex) {
   return(apply(df, 2, calc.qpsp_profile))
 }
 
-
-qpsp_yeoh <- calc.qpsp1(gfs_yeoh, list_corum)
-qpsp_yeoh[,1:5]
+qpsp_yeoh <- calc.qpsp1(gfs_yeoh, subnetwork_nea)
+tail(qpsp_yeoh)
 length(list_corum)
+
+nea_size <- sapply(subnetwork_nea, length)
 
 # Plot PCA before selecting features
 # Batch information of all the timepoints
@@ -1391,7 +1446,7 @@ batch_colour <- batch_palette[batch_info]
 # Shape of all timepoints
 timepoint_shape <- rep(21:23, c(208,208,45))
 plot.pca_3d(qpsp_yeoh, batch_colour, timepoint_shape)
-rgl.postscript("dump/pca_3d-qpsp2.pdf", "pdf")
+rgl.postscript("dump/pca_3d-qpsp_nea.pdf", "pdf")
 
 # Selecting drug responsive genes between D0 and D8
 ttest_pvalue <- calc_ttest(qpsp_yeoh[,1:416], 208, is_paired = T)
@@ -1401,4 +1456,131 @@ pvalue_probesets <- names(ttest_pvalue)[ttest_pvalue <= 0.05 & !is.nan(ttest_pva
 print(length(pvalue_probesets))
 selected_qpsp_yeoh <- qpsp_yeoh[pvalue_probesets,]
 
-corrected_df <- selected_qpsp_yeoh
+corrected_df <- qpsp_yeoh
+
+
+
+
+# ANGLE -------------------------------------------------------------------
+plot.angle <- function(df) {
+  plot_1 <- ggplot(df) +
+    geom_point(aes(x = angle_d0d8, y = diff_l2norm, col = factor(label)), show.legend = F) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+
+  plot_2 <- ggplot(df) +
+    geom_point(aes(x = angle_d0d8, y = erm, col = factor(label)), show.legend = F) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+
+  multiplot <- plot_grid(plot_1, plot_2, ncol = 2)
+  return(multiplot)
+}
+
+# Quantile %>% Feature selection %>% PCA
+results_df <- collate_results(features_df1,
+                              features_df2,
+                              features_df3,
+                              features_df4,
+                              yeoh_label)
+
+multiplot <- plot.angle(results_df)
+multiplot
+ggsave("dump/angle_pca_2.pdf", multiplot, width = 8, height = 4)
+
+analysis_df <- cbind(results_df,
+                     yeoh_label[rownames(results_df),"subtype", drop = F])
+plot_2 <- ggplot(analysis_df) +
+  geom_point(aes(x = d0d8_l2norm, y = erm1, col = factor(label)), show.legend = F) +
+  scale_color_manual(values = c("darkolivegreen3", "tomato3")) +
+  facet_wrap(~subtype, nrow = 2, ncol = 4)
+
+ggsave("dump/quantile_pca_subtype.pdf", width = 12, height = 6)
+
+# Subtype analysis
+
+
+# Quantile %>% Feature selection
+quantile_feat_selection <- t(corrected_df)
+response_df <- quantile_feat_selection[1:416,]
+normal_df <- quantile_feat_selection[417:461,]
+
+# Calculating ERM distance
+features_df1 <- calc_erm1(response_df, normal_df)
+features_df2 <- calc_erm2(response_df, normal_df)
+features_df3 <- calc_erm3(response_df, normal_df)
+features_df4 <- calc_erm4(response_df)
+
+results_df <- collate_results(features_df1,
+                              features_df2,
+                              features_df3,
+                              features_df4,
+                              yeoh_label)
+head(results_df)
+
+plot.angle <- function(df) {
+  plot_1 <- ggplot(df) +
+    geom_point(aes(x = angle_d0d8, y = d0d8_l2norm, col = factor(label)), show.legend = F) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+  
+  plot_2 <- ggplot(df) +
+    geom_point(aes(x = d0d8_l2norm, y = erm1, col = factor(label)), show.legend = F) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+  
+  multiplot <- plot_grid(plot_1, plot_2, ncol = 2)
+  return(multiplot)
+}
+
+multiplot <- plot.angle(results_df)
+ggsave("dump/angle_selected_2.pdf", multiplot, width = 8, height = 4)
+
+# Quantile
+t_quantile <- t(quantile_yeoh)
+response_df <- t_quantile[1:416,]
+normal_df <- t_quantile[417:461,]
+
+# Calculating ERM distance
+features_df1 <- calc_erm1(response_df, normal_df)
+features_df2 <- calc_erm2(response_df, normal_df)
+features_df3 <- calc_erm3(response_df, normal_df)
+features_df4 <- calc_erm4(response_df)
+
+results_df <- collate_results(features_df1,
+                              features_df2,
+                              features_df3,
+                              features_df4,
+                              yeoh_label)
+head(results_df)
+
+multiplot <- plot.angle(results_df)
+multiplot
+ggsave("dump/angle_quantile_2.pdf", multiplot, width = 8, height = 4)
+
+# Plot density curves separated by class
+colour_info <- rep(c("darkolivegreen3", "tomato3","gold"), c(208,208,45))
+class_colour <- rep(colour_info, each = nrow(quantile_yeoh))
+quantile_density <- ggplot(cbind(stack(quantile_yeoh), class_colour)) +
+  geom_density(aes(x = values, col = ind), show.legend = F) + 
+  facet_wrap(~class_colour)
+
+# Plot 3D scatter
+plot.pch_3d <- function(df, colour_code = "lightblue", shape_vec = 21) {
+  rgl.open()
+  rgl.bg(color="white")
+  rgl.viewpoint(zoom = 1)
+  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
+  par3d(windowRect = c(50, 20, 500, 500))
+  # Plot of MILE dataset
+  pch3d(df[,1], df[,2], df[,3], bg = colour_code,
+        pch = shape_vec, cex = 0.3, lwd = 1.5)
+  # axes3d(c('x-', 'y+', 'z+'),
+  #        col = "gray8", labels = F, tick = F)
+  box3d(col = "black")
+  title3d(xlab = colnames(df)[1], ylab = colnames(df)[2],
+          zlab = colnames(df)[3], col = "black")
+}
+head(results_df[,c(1,8,9)])
+
+
+colour_label <- ifelse(results_df[,10] == 1, "tomato3", "darkolivegreen3")
+
+plot.pch_3d(results_df[,c(1,8,9)], colour_label)
+

@@ -12,9 +12,9 @@ plot_batch <- function(df, batch_info, shape_info) {
   batch_factor <- factor(batch_info)
   shape_factor <- factor(shape_info)
   # Principal component analysis
-  col_logical <- apply(t(df), 2, sum) != 0 & apply(t(df), 2, var) != 0
-  pca_df <- t(df)[, col_logical]
-  pca_obj <- prcomp(pca_df, center = T, scale. = T)
+  # col_logical <- apply(t(df), 2, sum) != 0 & apply(t(df), 2, var) != 0
+  # transpose_df <- t(df)[, col_logical]
+  pca_obj <- prcomp(t(df), center = T, scale. = F)
   pca_arr <- pca_obj$x
   # Eigenvalues
   pca_df <- data.frame(pca_arr)
@@ -22,26 +22,6 @@ plot_batch <- function(df, batch_info, shape_info) {
   # Percentage variance of each PC
   var_pct <- eig_value/sum(eig_value)
   pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pct[1:5]*100)
-
-  # # Argument: PC coordinates for single PC
-  # calc.pc_var <- function(vec) {
-  #   # Argument: ANOVA attributes; Calculates percentage of variance
-  #   # SS_between/SS_between + SS_within
-  #   calc.var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
-  #   pc_metadata <- data.frame(pc = vec,
-  #                             batch = as.factor(batch_info),
-  #                             class = as.factor(class_info))
-  #   batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
-  #   class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
-  #   return(c(calc.var_percentage(batch_anova_attr),
-  #            calc.var_percentage(class_anova_attr)))
-  # }
-  # var_composition <- sapply(pca_df, calc.pc_var)
-  # pca_var_df <- data.frame(var_pct,
-  #                          batch_pct = var_composition[1,],
-  #                          class_pct = var_composition[2,])
-  # total_batch_pct <- sum(pca_var_df$var_pct * pca_var_df$batch_pct)*100
-  # total_class_pct <- sum(pca_var_df$var_pct * pca_var_df$class_pct)*100
   
   # PCA scatter plot
   top_pc <- as.data.frame(pca_obj$x[,1:4])
@@ -72,7 +52,7 @@ plot_batch <- function(df, batch_info, shape_info) {
   # Plot all graphs
   pca <- plot_grid(pc1_pc2, pc3_pc4)
   multiplot <- plot_grid(mean_scatter, pca, nrow = 2)
-  return(multiplot)
+  return(pca)
 }
 
 # Returns: ggplot2 of PCA plot
@@ -103,9 +83,10 @@ batch_info <- rep(1:6, each = 10)
 class_info <- rep(rep(1:2, each = 5), 6)
 
 # COMPARISON (EQUAL) ---------------------------------------------------------------
-# # No normalisation
-# plot_before <- plot_batch(raw_maqc, batch_info, shape_info)
-# plot_before
+# No normalisation
+plot_before <- plot_batch(filtered_maqc, batch_info, class_info)
+plot_before
+
 # ggsave("dump/plot_before.pdf", plot_before,
 #        width = 6, height = 6)
 # 
@@ -265,10 +246,21 @@ selection_index <- c(1:10,11:14,16:20,21:25,26:29,31:33,36:40,41:45,46:48,51:53,
 odd_maqc <- log_maqc[,selection_index]
 odd_batch_info <- rep(1:6, c(10,9,9,8,8,7))
 odd_class_info <- substring(colnames(odd_maqc), 7, 7)
+odd_class_numeric <- ifelse(odd_class_info == "A", 1, 2)
+odd_class_numeric
+# TODO: SHOULD FILTER AGAIN!
+
+ketchum <- eval.batch_effects(odd_maqc, odd_batch_info, odd_class_numeric)
 
 pca_plot <- plot_batch(odd_maqc, odd_batch_info, odd_class_info)
+pca_plot
 ggsave("dump/pca_odd_maqc-uncorrected.pdf", pca_plot,
        width = 8, height = 4)
+
+# Quantile
+quantile_maqc <- norm.quantile(odd_maqc)
+ketchum <- eval.batch_effects(quantile_maqc, odd_batch_info, odd_class_numeric)
+calc.var_preservation(odd_maqc, quantile_maqc)
 
 # ComBat
 # Creation of pData dataframe (metadata)
@@ -304,13 +296,19 @@ plot_combat_log_scaled
 ggsave("dump/pca_odd_maqc-combat_i.pdf", plot_combat_log_scaled,
        width = 8, height = 4)
 
+ketchum <- eval.batch_effects(combat_maqc_df, odd_batch_info, odd_class_numeric)
+calc.var_preservation(odd_maqc, combat_maqc_df)
 
 # CBC
-cbc_maqc <- norm.CBC(odd_maqc, odd_batch_info, odd_class_info, 1:6)
+cbc_maqc <- norm.BCM(odd_maqc, odd_batch_info, odd_class_info, 3)
+colnames(cbc_maqc)
 plot_cbc <- plot_batch(cbc_maqc, odd_batch_info, odd_class_info)
 plot_cbc
-ggsave("dump/pca_odd_maqc-bcm.pdf", plot_cbc,
+ggsave("dump/pca_odd_maqc-bcm_ref.pdf", plot_cbc,
        width = 8, height = 4)
+
+ketchum <- eval.batch_effects(cbc_maqc, odd_batch_info, odd_class_numeric)
+calc.var_preservation(odd_maqc, cbc_maqc)
 
 # Harman
 harman_obj <- harman(odd_maqc, odd_class_info, odd_batch_info, limit = 0.95)
@@ -323,36 +321,56 @@ plot_harman_odd
 ggsave("dump/pca_odd_maqc-harman.pdf", plot_harman_odd,
        width = 8, height = 4)
 
+ketchum <- eval.batch_effects(harman_maqc, odd_batch_info, odd_class_numeric)
+calc.var_preservation(odd_maqc, harman_maqc)
+
+pca_coord <- plot_batch(harman_maqc, odd_batch_info, odd_class_info)
+rownames(pca_coord)
+harman_pc1 <- pca_coord[,1, drop = F]
+
+list_pc1 <- split.data.frame(harman_pc1, odd_batch_info)
+sapply(list_pc1, colMeans)
+
 # Scanorama
 # Write log_maqc for numpy array
 write.table(odd_log_maqc, "data/scanorama/odd_log_maqc.tsv",
             quote = F, sep = "\t", row.names = F, col.names = F)
 # Read scanorama corrected data
-scanorama_maqc_odd <- read.table("data/scanorama/maqc/scanorama_data_odd.tsv",
+scanorama_maqc_odd <- read.table("data/scanorama/maqc/scanorama_data_odd_k20.tsv",
                                  sep = "\t", row.names = 1)
 colnames(scanorama_maqc_odd) <- colnames(odd_maqc)
+
 plot_scanorama_odd <- plot_batch(scanorama_maqc_odd,
                                  odd_batch_info, odd_class_info)
 plot_scanorama_odd
 ggsave("dump/pca_odd_maqc-scanorma_k20.pdf", plot_scanorama_odd,
        width = 8, height = 4)
 
+ketchum <- eval.batch_effects(scanorama_maqc_odd, odd_batch_info, odd_class_numeric)
+calc.var_preservation(odd_maqc, scanorama_maqc_odd)
+
 # MNN
 list_small_df <- split.default(odd_maqc, odd_batch_info)
 list_small_arr <- lapply(list_small_df, data.matrix)
 
-list_args <- c(list_small_arr, k = 7)
+list_args <- c(list_small_arr, k = 7, cos.norm.out = F)
 mnn_maqc_obj <- do.call(mnnCorrect, list_args)
-
 mnn_maqc_odd <- do.call(cbind, mnn_maqc_obj$corrected)
 # Column names for matrix arranged in above order
 colnames(mnn_maqc_odd) <- colnames(odd_maqc)
-plot_mnn_odd_k7 <- plot_batch(data.frame(mnn_maqc_odd),
+
+mnn_maqc_odd[mnn_maqc_odd < 0] <- 0
+mnn_maqc_df <- data.frame(mnn_maqc_odd)
+
+plot_mnn_odd_k7 <- plot_batch(mnn_maqc_df,
                               odd_batch_info, odd_class_info)
 plot_mnn_odd_k7
 
 ggsave("dump/pca_odd_maqc-mnn_k7.pdf", plot_mnn_odd_k7,
        width = 8, height = 4)
+
+ketchum <- eval.batch_effects(mnn_maqc_df, odd_batch_info, odd_class_numeric)
+calc.var_preservation(odd_maqc, mnn_maqc_df)
 
 # SMALL DATASET -----------------------------------------------------------
 small_index <- 1:3 + rep(seq(0,55,5), each = 3)
@@ -623,7 +641,6 @@ scanorama <- import('scanorama')
 
 
 # MODELLING ---------------------------------------------------------------
-
 plot_evaluation(log2_transform(raw_maqc), batch_info)
 
 x <- log2_transform(norm.mean_scaling(raw_maqc))
@@ -718,6 +735,38 @@ hist(correction_vectors$A, breaks = 30)
 hist(correction_vectors$B, breaks = 30)
 
 plot(correction_vectors$A, correction_vectors$B)
+
+par(mfrow=c(1,2))
+plot(log_maqc[,1], log_maqc[,11], main = "B2A1 vs B1A1")
+plot(log_maqc[,1], log_maqc[,2], main = "B1A2 vs B1A1")
+plot_scatter <- recordPlot()
+save_fig(plot_scatter, "dump/batch_effects.png")
+
+dim(log_maqc)
+
+plot_batch(log_maqc, batch_info, class_info)
+eval.batch_effects(log_maqc, batch_info, class_info)
+
+legit_maqc <- remove_probesets(log_maqc)
+plot_batch(legit_maqc, batch_info, class_info)
+
+pca_obj <- prcomp(t(legit_maqc))
+probeset_pc1 <- names(head(sort(pca_obj$rotation[,1], decreasing = T), 1000))
+probeset_pc2 <- names(head(sort(pca_obj$rotation[,2], decreasing = T), 1000))
+probeset_pc3 <- names(head(sort(pca_obj$rotation[,3], decreasing = T), 1000))
+
+probeset_batch <- intersect(probeset_pc2, probeset_pc3)
+
+subdf_maqc <- legit_maqc[probeset_pc2,]
+
+class_pch <- ifelse(class_info == 1, 19, 17)
+
+par(mfrow=c(4,1)) 
+num <- 500
+for (i in num:(num+3)) {
+  plot(as.numeric(subdf_maqc[i,]), axes = F, ann = F,
+       col = batch_info, pch = class_pch)
+}
 
 # EVALUATION --------------------------------------------------------------
 filtered_maqc <- raw_maqc[filter_probesets(raw_maqc, 0.1),]
