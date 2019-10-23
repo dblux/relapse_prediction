@@ -52,7 +52,7 @@ plot_batch <- function(df, batch_info, shape_info) {
   # Plot all graphs
   pca <- plot_grid(pc1_pc2, pc3_pc4)
   multiplot <- plot_grid(mean_scatter, pca, nrow = 2)
-  return(pca)
+  return(multiplot)
 }
 
 # Returns: ggplot2 of PCA plot
@@ -74,19 +74,80 @@ plot_pca <- function(df, batch_info) {
 raw_maqc <- read.table("../diff_expr/data/MAQC-I/processed/mas5_original-ref.tsv",
                        sep = "\t", header = T, row.names = 1)
 
-filtered_maqc <- raw_maqc[filter_probesets(raw_maqc, 0.1),]
-scaled_maqc <- norm.mean_scaling(filtered_maqc)
-log_maqc <- log2_transform(scaled_maqc)
-
 # MAQC metadata
 batch_info <- rep(1:6, each = 10)
 class_info <- rep(rep(1:2, each = 5), 6)
 
+scaled_maqc <- norm.mean_scaling(raw_maqc)
+selected_probesets <- filter_probesets(scaled_maqc, 0.3, class_info)
+filtered_maqc <- scaled_maqc[selected_probesets,]
+log_maqc <- log2_transform(filtered_maqc)
+
 # COMPARISON (EQUAL) ---------------------------------------------------------------
 # No normalisation
-plot_before <- plot_batch(filtered_maqc, batch_info, class_info)
-plot_before
+class_letter <- ifelse(class_info == 1, "A", "B")
+plot_before <- plot_batch(log_maqc, batch_info, class_letter)
 
+foo_data <- data.frame(A = 1:10, B = 1:10)
+batch_factor <- as.factor(1:10)
+shape_factor <- rep(c("D0","D8","N"), c(3,3,4))
+
+plot_foo <- ggplot(foo_data, aes(x = A, y = B, col = batch_factor, shape = shape_factor)) +
+  geom_point(size = 3, show.legend = T) +
+  scale_colour_manual(values = batch_palette) +
+  scale_shape_manual(values=21:23) +
+  labs(shape="Class", colour="Batch")
+
+plot_foo
+ggsave("dump/all_legend.pdf", plot_foo,
+       width = 8, height = 8)
+
+plot_batch <- function(df, batch_info, shape_info) {
+  batch_factor <- factor(batch_info)
+  shape_factor <- factor(shape_info)
+  # Principal component analysis
+  # col_logical <- apply(t(df), 2, sum) != 0 & apply(t(df), 2, var) != 0
+  # transpose_df <- t(df)[, col_logical]
+  pca_obj <- prcomp(t(df), center = T, scale. = F)
+  pca_arr <- pca_obj$x
+  # Eigenvalues
+  pca_df <- data.frame(pca_arr)
+  eig_value <- (pca_obj$sdev)^2
+  # Percentage variance of each PC
+  var_pct <- eig_value/sum(eig_value)
+  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pct[1:5]*100)
+  
+  # PCA scatter plot
+  top_pc <- as.data.frame(pca_obj$x[,1:4])
+  pc1_pc2 <- ggplot(top_pc, aes(x = PC1, y = PC2, col = batch_factor, shape = shape_factor)) +
+    geom_point(size = 3, show.legend = F) +
+    # scale_shape_manual(values=c(19,17)) +
+    labs(x = pc_labels[1], y = pc_labels[2])
+  
+  pc3_pc4 <- ggplot(top_pc, aes(x = PC3, y = PC4, col = batch_factor, shape = shape_factor)) +
+    geom_point(size = 3, show.legend = T) +
+    labs(x = pc_labels[3], y = pc_labels[4], shape="Class", colour="Batch")
+  
+  # PLOT MEANS
+  # Melt dataframe
+  melt_df <- melt(df, variable.name = "ID")
+  # Mean probe intensities for each chip
+  mean_tibble <- melt_df %>% group_by(ID) %>%
+    summarise(mean = mean(value))
+  mean_scatter <- ggplot(mean_tibble, aes(x = ID,
+                                          y = mean,
+                                          col = batch_factor,
+                                          shape = shape_factor)) +
+    geom_point(show.legend = F, size = 3) +
+    # labs(title = sprintf("BE: %.2f%% \n CV: %.2f%%",
+    #                      total_batch_pct, total_class_pct)) +
+    theme(axis.text.x = element_text(size = 5, angle = 90, hjust = 1))
+  
+  # Plot all graphs
+  pca <- plot_grid(pc1_pc2, pc3_pc4)
+  multiplot <- plot_grid(mean_scatter, pca, nrow = 2)
+  return(pca)
+}
 # ggsave("dump/plot_before.pdf", plot_before,
 #        width = 6, height = 6)
 # 
@@ -143,9 +204,6 @@ ggsave("dump/plot_class_qnorm.pdf", plot_qnorm,
        width = 6, height = 6)
 
 # Harman
-scaled_maqc <- norm.mean_scaling(raw_maqc)
-log_maqc <- log2_transform(scaled_maqc)
-
 harman_obj <- harman(scaled_maqc, class_info, batch_info)
 harman_maqc <- data.frame(reconstructData(harman_obj))
 
@@ -312,6 +370,7 @@ calc.var_preservation(odd_maqc, cbc_maqc)
 
 # Harman
 harman_obj <- harman(odd_maqc, odd_class_info, odd_batch_info, limit = 0.95)
+
 harman_maqc <- data.frame(reconstructData(harman_obj))
 # Replace negative values with 0
 harman_maqc[harman_maqc < 0] <- 0
@@ -330,6 +389,23 @@ harman_pc1 <- pca_coord[,1, drop = F]
 
 list_pc1 <- split.data.frame(harman_pc1, odd_batch_info)
 sapply(list_pc1, colMeans)
+
+# CS-Harman
+# Error: Require more than one experimental factor and/or batch for experimentstructure
+list_maqc <- split.default(odd_maqc, odd_class_info)
+list_batch_info <- lapply(list_maqc, function(df1) substring(colnames(df1),5,5))
+list_class_info <- split(odd_class_info, odd_class_info)
+list_harman_obj <- mapply(harman, list_maqc, list_class_info, list_batch_info, limit = 0.95)
+
+str(list_maqc)
+harman(list_maqc[[1]], rep("A", 25), rep(1:2, c(12,13)), limit = 0.95)
+# Unable to run one batch
+harman(list_maqc[[1]], rep(LETTERS[1:2], c(24,1)), rep(1, 25), limit = 0.95)
+
+pca_obj <- prcomp(t(list_maqc[[1]]))
+pca_arr <- pca_obj$x
+batch_info99 <- substring(rownames(pca_arr), 5, 5)
+plot(pca_arr[,1:2], col = batch_info99)
 
 # Scanorama
 # Write log_maqc for numpy array
@@ -641,6 +717,28 @@ scanorama <- import('scanorama')
 
 
 # MODELLING ---------------------------------------------------------------
+# Distributions of values across batches are very different
+# Distributions of values within batches are similar
+hist(log_maqc[,1],
+     prob = T, col = "lightblue", breaks = 30)
+hist(log_maqc[,42],
+     prob = T, col = "pink", breaks = 30, add = T)
+
+# Probesets with zero values
+colnames(log_maqc)
+list_maqc <- split.default(odd_maqc, odd_class_info)
+list_batch_info <- lapply(list_maqc, function(df1) substring(colnames(df1),5,5))
+list_class_info <- split(odd_class_info, odd_class_info)
+list_harman_obj <- mapply(harman, list_maqc, list_class_info, list_batch_info, limit = 0.95)
+
+# Does batch effects affect highly or lowly expressed genes?
+plot_batch(log_maqc, batch_info, class_info)
+
+
+### Local consistencies
+# Consistencies in magnitude
+
+
 plot_evaluation(log2_transform(raw_maqc), batch_info)
 
 x <- log2_transform(norm.mean_scaling(raw_maqc))

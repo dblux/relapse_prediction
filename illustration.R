@@ -1,4 +1,5 @@
 library(RColorBrewer)
+library(rgl)
 
 A1 <- data.frame(x = rnorm(100, 5), y = rnorm(100,10))
 B1 <- data.frame(x = rnorm(100, 15), y = rnorm(100,5))
@@ -21,18 +22,20 @@ shape_vec <- rep(c(21,22,23), c(300,300,200))
 colour_code <- rep(c("lightblue","tomato3","darkolivegreen3",
                      "tomato3","darkolivegreen3","gold",
                      "tomato3","darkolivegreen3"), each = 100)
+outline_colour <- rep(c("black", "deepskyblue4", "darkorchid4"), c(300,300,200))
+
 
 rgl.open()
-rgl.bg(color="white")
+rgl.bg()
 rgl.viewpoint(zoom = 0.6)
 # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
 par3d(windowRect = c(50, 20, 500, 500))
 # Plot of MILE dataset
-with(df_combined, pch3d(x, z, y, bg = colour_code,
-                   pch = shape_vec, cex = 0.3, lwd = 1.5))
+with(df_combined, pch3d(x, z, y, bg = colour_code, color = outline_colour,
+                        pch = shape_vec, cex = 0.3, lwd = 2))
 axes3d(c('x-', 'y+', 'z+'),
        col = "gray8", labels = F, tick = F)
-rgl.postscript("dump/bcm_illustration.pdf", "pdf")
+rgl.postscript("dump/bcm_illustration_outline.pdf", "pdf")
 
 # title3d(xlab = pc_labels[1], ylab = pc_labels[2],
 #         zlab = pc_labels[3], col = "black")
