@@ -719,7 +719,7 @@ scanorama <- import('scanorama')
 # MODELLING ---------------------------------------------------------------
 # Distributions of values across batches are very different
 # Distributions of values within batches are similar
-hist(log_maqc[,1],
+hist(log_maqc[,46],
      prob = T, col = "lightblue", breaks = 30)
 hist(log_maqc[,42],
      prob = T, col = "pink", breaks = 30, add = T)
@@ -731,14 +731,104 @@ list_batch_info <- lapply(list_maqc, function(df1) substring(colnames(df1),5,5))
 list_class_info <- split(odd_class_info, odd_class_info)
 list_harman_obj <- mapply(harman, list_maqc, list_class_info, list_batch_info, limit = 0.95)
 
-# Does batch effects affect highly or lowly expressed genes?
-plot_batch(log_maqc, batch_info, class_info)
+colnames(log_maqc)
+batch_1A <- log_maqc[,1:5]
+batch_2A <- log_maqc[,11:15]
+batch_3A <- log_maqc[,21:25]
+batch_4A <- log_maqc[,31:35]
+batch_5A <- log_maqc[,41:45]
+batch_6A <- log_maqc[,51:55]
 
+ps1 <- rownames(batch_1A)[rowSums(batch_1A) == 0]
+ps2 <- rownames(batch_2A)[rowSums(batch_2A) == 0]
+ps3 <- rownames(batch_3A)[rowSums(batch_3A) == 0]
+ps4 <- rownames(batch_4A)[rowSums(batch_4A) == 0]
+ps5 <- rownames(batch_5A)[rowSums(batch_5A) == 0]
+ps6 <- rownames(batch_6A)[rowSums(batch_6A) == 0]
+
+length(intersect(ps1,ps6))
+length(setdiff(ps6,ps1))
+
+length(ps1)
+nrow(log_maqc)
+
+# Probesets that are empty in all batches
+all_empty <- Reduce(intersect, list(intersect(ps1,ps2), intersect(ps1,ps3), intersect(ps1,ps4),
+                       intersect(ps1,ps5), intersect(ps1,ps6)))
+length(all_empty)
+
+# Probesets that are not present in batch 1 but present in other batches
+absent_batch1 <- Reduce(intersect, list(setdiff(ps1,ps2), setdiff(ps1,ps3), setdiff(ps1,ps4),
+                       setdiff(ps1,ps5), setdiff(ps1,ps6)))
+# Probesets that are present in batch 1 but not all other batches
+present_batch1 <- Reduce(intersect, list(setdiff(ps2,ps1), setdiff(ps3,ps1),
+                       setdiff(ps4,ps1), setdiff(ps5,ps1), setdiff(ps6,ps1)))
+
+absent_batch23456 <- Reduce(intersect, list(intersect(ps2,ps3), intersect(ps3,ps4),
+                       intersect(ps5,ps6)))
+absent_batch_real <- setdiff(absent_batch23456, ps1)
+
+afflicted_logvec <- rownames(log_maqc) %in% c(present_batch1, absent_batch1)
+
+plot_batch(log_maqc[afflicted_logvec,], batch_info, class_info)
+
+
+class_pch <- ifelse(class_info == 1, 19, 17)
+afflicted_maqc <- log_maqc[c(present_batch1, absent_batch1),]
+afflicted_maqc <- log_maqc[absent_batch1,]
+# Look at afflicted probesets
+par(mfrow=c(2,2))
+i <- 19
+for (j in (4*i+1):(4*i+4)) {
+  print(j)
+  plot(1:60, afflicted_maqc[j,],
+       axes = F, ann = F,
+       col = batch_info, pch = class_pch)
+}
+
+# Does batch effects affect highly or lowly expressed genes?
+plot_batch(log_maqc[,1:50], batch_info[1:50], class_info[1:50])
+
+# PCA loadings
+# Data without batch 5
+subset_maqc <- log_maqc[,1:50]
+pca_obj <- prcomp(t(subset_maqc), scale. = F)
+pca_loading <- pca_obj$rotation
+
+# PC2 loadings
+pc2 <- pca_loading[,2]
+# CONSIDER HIGH WEIGHTING REGARDLESS OF DIRECTION
+pc2_ps <- names(sort(abs(pc2), decreasing = T))[1:500]
+# sort(pc2, decreasing = T)[30000:31000]
+class_pch <- ifelse(class_info == 1, 19, 17)
+
+inspect_maqc <- log_maqc[pc2_ps, 1:50]
+# Look at afflicted probesets
+par(mfrow=c(2,2))
+i <- 0
+for (j in (4*i+1):(4*i+4)) {
+  print(j)
+  plot(1:60, afflicted_maqc[j,],
+       axes = F, ann = F,
+       col = batch_info[1:50], pch = class_pch[1:50])
+}
+
+# Magnitude of high-dimensional vectors do not vary alot
+pca_obj1 <- prcomp(t(log_maqc))
+# Magnitude of vectors in pca space
+apply(pca_obj1$x, 1, calc.l2_norm)
+# Magnitude of vectors in non-centered original space
+apply(log_maqc, 2, calc.l2_norm)
+# Magnitude of vectors in centered original space
+apply(scale(log_maqc, scale = F), 2, calc.l2_norm)
+
+
+correction_svd <- function(df1, pc_remove) {
+  
+}
 
 ### Local consistencies
 # Consistencies in magnitude
-
-
 plot_evaluation(log2_transform(raw_maqc), batch_info)
 
 x <- log2_transform(norm.mean_scaling(raw_maqc))

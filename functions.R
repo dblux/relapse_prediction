@@ -1,16 +1,23 @@
 #!/usr/bin/env Rscript
 library(dplyr)
 
+# Cosine normalisation / L2-norm normalisation
+normaliseCosine <- function(df1) {
+  l2norm_vec <- apply(df1, 2, calcL2Norm)
+  return(mapply(`/`, df1, l2norm_vec))
+}
+
 # Min-max scaling function
 # Returns: Scaled vector with range [0,1]
-norm.minmax <- function(vec) {(vec-min(vec))/(max(vec)-min(vec))}
+normaliseMinmax <- function(vec) {(vec-min(vec))/(max(vec)-min(vec))}
 
 # Trimmed mean scaling
 # Non-log values
 # Trimmed mean_scaling does not remove all tied values
-norm.mean_scaling <- function(df, target_mean = 500, trim_percentage = 0.02) {
-  trimmed_mean <- apply(df, 2, mean, trim = trim_percentage)
+normaliseMeanScaling <- function(df, target_mean = 500, trim = 0.02) {
+  trimmed_mean <- apply(df, 2, mean, trim = trim)
   scaling_factor <- target_mean/trimmed_mean
+  print(scaling_factor)
   scaled_df <- as.data.frame(mapply(function(a,b) a*b, df, scaling_factor))
   rownames(scaled_df) <- rownames(df)
   return(scaled_df)
@@ -18,7 +25,7 @@ norm.mean_scaling <- function(df, target_mean = 500, trim_percentage = 0.02) {
 
 # Quantile normalisation: 0 values are assigned 0 automatically
 # Takes in df where columns are samples and rows are genes
-norm.quantile <- function(df) {
+normaliseQuantile <- function(df) {
   zero_filter <- df == 0
   sort_arr <- apply(df, 2, sort)
   # Creates reference distribution
@@ -36,7 +43,7 @@ norm.quantile <- function(df) {
 # Gene Fuzzy Scoring function transforms gene expression values
 # Wilson Goh's paper
 # Dense rank is used
-norm.gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
+normaliseGFS <- function(A, upper = 0.05, lower = 0.15, num_intervals = 0) {
   # Bins score with range [0,1] into intervals
   # E.g. 4 Intervals: Binned into 0.2, 0.4, 0.6, 0.8
   bin <- function(score, num_intervals) {
@@ -97,7 +104,7 @@ norm.gfs <- function(A, upper=0.05, lower=0.15, num_intervals=0) {
   return (as.data.frame(ranked_A))
 }
 
-norm.cdf <- function(df) {
+normaliseCDF <- function(df) {
   for (c in 1:ncol(df)) {
     notzero <- df[,c] != 0
     df[,c][notzero] <- rank(df[,c][notzero])
@@ -107,26 +114,47 @@ norm.cdf <- function(df) {
 }
 
 # Filter probes with too many zeros
-# Arguments: Df, percentage threshold of non-zero values
-# Returns logical vector selecting rows that meet threshold of non-zero values
-filter_probesets <- function(df, percent_threshold) {
-  logical_df <- df != 0
-  selected_logvec <- rowSums(logical_df) > percent_threshold * ncol(df)
-  return(selected_logvec)
+#' @param df dataframe
+#' @param percent_threshold percentage threshold of non-zero values
+#' @param metadata_df df containing class labels of samples
+#' @param logical_func a function that is either "all" or "any". (Either all or
+#' just one class have to pass the threshold)
+#' @return vector containing rownames of rows that meet threshold of non-zero
+#' values
+filterProbesets <- function(df1, percent_threshold, metadata_df = NULL,
+                            logical_func = any) {
+  if (is.null(metadata_df)) {
+    logical_df <- df1 != 0
+    selected_logvec <- rowSums(logical_df) > percent_threshold * ncol(df1)
+    print(paste("No. of probesets removed =",
+                nrow(df1) - sum(selected_logvec)))
+    return(df1[selected_logvec,])
+  } else {
+    class_factor <- metadata_df[colnames(df1),"class"]
+    logical_df <- data.frame(df1 != 0)
+    list_logical_df <- split.default(logical_df, class_factor)
+    list_logvec <- lapply(
+      list_logical_df,
+      function(df1) rowSums(df1) > (percent_threshold * ncol(df1))
+    )
+    combined_log_df <- do.call(cbind,list_logvec)
+    print(head(combined_log_df))
+    selected_logvec <- apply(combined_log_df, 1, logical_func)
+    # selected_logvec <- do.call(mapply, c(logical_func, list_logvec))
+    print(paste("No. of probesets removed =",
+                nrow(df1) - sum(selected_logvec)))
+    return(df1[selected_logvec,])
+  }
 }
 
-plot.pca_3d <- function(df, colour_code) {
-  pca_obj <- prcomp(t(df))
-  pca_arr <- as.data.frame(pca_obj$x[,1:5])
-  # RGL plot parameters
-  rgl.open()
-  rgl.bg(color="white")
-  rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
-  par3d(windowRect = c(50, 20, 500, 500))
-  aspect3d(1,1,1)
-  # Plot of MILE dataset
-  with(pca_arr, plot3d(PC1, PC2, PC3, col = colour_code, pch = 17,
-                       type = "p", size = 5))
+#' Removes ambiguous and AFFY probesets from dataframe
+#' Rowname of affymetrix probesets
+removeProbesets <- function(df) {
+  logical_vec <- grepl("[0-9]_at", rownames(df)) & !startsWith(rownames(df),
+                                                               "AFFX")
+  print(paste0("No. of ambiguous and AFFY probesets removed: ",
+               nrow(df) - sum(logical_vec)))
+  return(df[logical_vec, , drop=F])
 }
 
 # Function that calculates the matrix of mean differences from the patient and control matrix
@@ -247,8 +275,30 @@ calc_logfc <- function(df1, df2, func = mean) {
   return(log2(fc))
 }
 
-# Calculates L2 norm of a vector
-l2_norm <- function(vec) sqrt(sum(vec^2))
+#' Calculates QPSP profiles of samples
+#' Rownames of df1 has to be the same annotation type as list of network vectors
+#' @param df1 dataframe of discrete GFS-transformed expression data with
+#' features in rows and samples in columns
+#' @param list_complex list of vectors that contain components of networks
+#' @return dataframe of QPSP profiles
+calcQPSP <- function(df1, list_complex) {
+  # All components in complex have to be measured in df1
+  df1_proteins <- rownames(df1)
+  # Logvec of whether entire complex is present
+  complex_logvec <- sapply(list_complex,
+                           function(vec) all(vec %in% df1_proteins))
+  print(sum(complex_logvec))
+  # Error if any NA in complex_logvec
+  if (anyNA(complex_logvec)) stop("NA present in logvec")
+  sublist_complex <- list_complex[complex_logvec]
+  
+  # Driver function that calculates QPSP profile for single sample
+  # @param col_vec Column vector representing single sample
+  calcSingleQPSP <- function(col_vec) {
+    sapply(sublist_complex, function(vec) mean(col_vec[vec]))
+  }
+  return(data.frame(apply(df1, 2, calcSingleQPSP)))
+}
 
 # Argument: Recorded plot
 # Save figure as file format indicated
@@ -288,7 +338,7 @@ affy2id <- function(df, annot_fpath) {
                                & !startsWith(rownames(probeset_annot), "A"), , drop=F]
   # Returns entrez ID for all probe sets
   id <- unname(sapply(rownames(df), function(x) probeset_annot[x,]))
-
+  
   # Indices of ambiguous probe sets and probe sets with no corresponding entrez ID to be deleted
   list_del <- which(grepl("///", id) | id == "")
   print(paste0("No. of probesets mapping to multiple IDs removed: ", sum(grepl("///", id))))
@@ -388,10 +438,23 @@ kegg_df <- function(kegg_fpath) {
 }
 
 # Assumes that dataframe has been log-transformed
-plot_evaluation <- function(df, batch_info) {
-  batch_factor <- factor(batch_info)
+plotExplore <- function(df1, metadata_df) {
+  # Obtaining batch and class annotations
+  batch_factor <- as.factor(metadata_df[colnames(df1),"batch"])
+  class_factor <- metadata_df[colnames(df1),"class"]
+  
   # Melt dataframe
-  melt_df <- melt(df, variable.name = "ID")
+  melt_df <- melt(df1, measure.vars = colnames(df1), variable.name = "ID")
+  melt_df$batch <- as.factor(metadata_df[melt_df$ID,"batch"])
+  melt_df$class <- metadata_df[melt_df$ID,"class"]
+  
+  # Plot means
+  mean_tibble <- melt_df %>% group_by(ID) %>% summarise(mean = mean(value))
+  mean_scatter <- ggplot(mean_tibble, aes(x = ID, y = mean,
+                                          col = batch_factor,
+                                          pch = class_factor)) +
+    geom_point(size = 3, show.legend = F) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
   
   # Plot boxplot
   boxplot <- ggplot(melt_df, aes(x = ID, y = value, col = ID)) + 
@@ -399,31 +462,35 @@ plot_evaluation <- function(df, batch_info) {
     theme(axis.text.x = element_text(angle = 90, hjust = 1))
   
   # Plot density curve
-  pdf <- ggplot(melt_df, aes(x = value, col = ID)) + 
-    geom_density(show.legend = T) +
-    xlim(0, 16)
+  print(head(melt_df))
+  print(tail(melt_df))
+  pdf <- ggplot(melt_df, aes(x = value, group = ID, col = batch)) +
+    geom_density(show.legend = F, alpha = 0.3) +
+    facet_wrap(~class) +
+    scale_color_viridis_d()
   
-  # Mean probe intensities for each chip
-  mean_tibble <- melt_df %>% group_by(ID) %>%
-    summarise(mean = mean(value))
-  mean_jitter <- ggplot(mean_tibble, aes(x = batch_factor,
-                                     y = mean,
-                                     col = batch_factor)) +
-    geom_jitter(show.legend = F) + 
-    theme(axis.text.x = element_text(angle = 20, hjust = 1))
-  # Principal component analysis
-  col_logical <- apply(t(df), 2, sum) != 0 & apply(t(df), 2, var) != 0
-  pca_df <- t(df)[, col_logical]
-  pca_obj <- prcomp(pca_df, center = T, scale. = T)
-  top_pc <- as.data.frame(pca_obj$x[,1:4])
-  pc1_pc2 <- ggplot(top_pc, aes(x = PC1, y = PC2, col = batch_factor)) +
-    geom_point(size = 3, show.legend = F)
-  pc3_pc4 <- ggplot(top_pc, aes(x = PC3, y = PC4, col = batch_factor)) +
-    geom_point(size = 3, show.legend = F)
+  # Plot PCA
+  # Filters out rows with all zero values
+  nonzero_logvec <- rowSums(df1) != 0 & apply(df1, 1, var) != 0
+  pca_obj <- prcomp(t(df1[nonzero_logvec,]),
+                    center = T, scale. = F)
+  pca_df <- data.frame(pca_obj$x[,1:4])
+  eigenvalues <- (pca_obj$sdev)^2
+  var_pc <- eigenvalues[1:5]/sum(eigenvalues)
+  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
+  
+  pc1_pc2 <- ggplot(pca_df, aes(x = PC1, y = PC2, col = batch_factor,
+                                pch = class_factor)) +
+    geom_point(size = 3, show.legend = F) +
+    labs(x = pc_labels[1], y = pc_labels[2])
+  pc1_pc3 <- ggplot(pca_df, aes(x = PC1, y = PC3, col = batch_factor,
+                                pch = class_factor)) +
+    geom_point(size = 3, show.legend = F) +
+    labs(x = pc_labels[1], y = pc_labels[3])
+  
   # Plot all graphs
-  pca <- plot_grid(pc1_pc2, pc3_pc4)
-  multiplot <- plot_grid(mean_jitter, boxplot, pdf, pca,
-                         nrow = 4)
+  pca <- plot_grid(pc1_pc2, pc1_pc3)
+  multiplot <- plot_grid(mean_scatter, pdf, pca, nrow = 3)
   return(multiplot)
 }
 
@@ -443,7 +510,102 @@ plot_pca <- function(df, batch_info) {
   return(pc1_pc2)
 }
 
-eval.batch_effects <- function(df, batch_info, class_info) {
+# 3D PCA plot
+plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
+                      ratio_list = list(2,1,1)) {
+  if (is.null(pc_labels)) {
+    print("PCA performed!")
+    pca_obj <- prcomp(t(df), center = T, scale. = F)
+    pca_df <- as.data.frame(pca_obj$x[,1:3])
+    eigenvalues <- (pca_obj$sdev)^2
+    var_pc <- eigenvalues[1:3]/sum(eigenvalues)
+    print(var_pc)
+    pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
+  } else {
+    print("No PCA performed!")
+    pca_df <- as.data.frame(df)
+  }
+  
+  # RGL plot parameters
+  rgl.open()
+  rgl.bg(color="white")
+  rgl.viewpoint(zoom = 0.8)
+  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
+  par3d(windowRect = c(50, 20, 500, 500))
+  with(pca_df, pch3d(PC1, PC2, PC3, bg = colour,
+                     pch = pch, cex = 0.5, lwd = 1.5))
+  box3d(col = "black")
+  title3d(xlab = pc_labels[1], ylab = pc_labels[2],
+          zlab = pc_labels[3], col = "black")
+  # Plot aspect ratios of axis according to variance
+  do.call(aspect3d, ratio_list)
+}
+
+# Plot PCA 3D: Batch effects
+# Plot batches in different colours and classes in different shapes
+plotPCA3DBatchEffects <- function(df1, metadata_df) {
+  # Batch and class annotations
+  batch_factor <- metadata_df[colnames(df1), "batch"]
+  batch_palette <- generateGgplotColours(length(unique(batch_factor)))
+  batch_colour <- batch_palette[batch_factor]
+  
+  class_factor <- metadata_df[colnames(df1), "class"]
+  all_pch <- 21:25
+  # Error if there are more classes than pch symbols (> 5)
+  stopifnot(length(unique(class_factor)) <= 5)
+  class_pch <- all_pch[class_factor]
+  plotPCA3D(df1, batch_colour, class_pch)
+}
+
+# Plots ROC and calculates AUC in a primitive fashion (i.e. ROC is step function)
+# Does not resolve ties in the score
+# Assumption: Lower score will be labelled preferentially as 1, ROC is step function
+# Assumption that score vec and label vecs are corresponding
+plotROC <- function(score_list, label_vec,
+                    name_vec = NULL, plot_title = NULL,
+                    is_bigger_better_vec = rep(F, length(score_list))) {
+  # Function to plot a single ROC curve and calculate AUC
+  plotSingleROC <- function(score_vec, is_bigger_better, color) {
+    # Sort label vector according to score vector in ascending order
+    sort_label <- label_vec[order(score_vec, decreasing = is_bigger_better)]
+    # Dataframe of TPR and FPR
+    df <- data.frame(TPR = cumsum(sort_label)/sum(sort_label),
+                     FPR = cumsum(!sort_label)/sum(!sort_label))
+    # Insert 0, 0 at the first row
+    roc_df <- rbind(c(0,0), df)
+    # Calculates change in FPR at each step
+    dFPR <- c(0, diff(roc_df$FPR))
+    # Sum of individual rectangle steps
+    AUC <- sum(roc_df$TPR * dFPR)
+    # Plot single ROC curve
+    lines(roc_df$FPR, roc_df$TPR,
+          col = color, lwd = 3)
+    return(AUC)
+  }
+  # Initialise plot
+  colour_palette <- c("#1B9E77", "#D95F02", "#7570B3", "#E7298A",
+                      "#66A61E", "#E6AB02", "#A6761D", "#666666")
+  color_index <- colour_palette[1:length(score_list)]
+  plot(NULL, main = plot_title,
+       xlab = "1 - Specificity", ylab = "Sensitivity",
+       xlim = c(0,1), ylim = c(0,1),
+       xaxs = "i", yaxs = "i",
+       cex.main = 1.8, cex.lab = 1.7, cex.axis = 1.6)
+  abline(0, 1, lty = 5, lwd = 2)
+  auc_vec <- mapply(plotSingleROC, score_list, is_bigger_better_vec,
+                    color_index, SIMPLIFY = T)
+  # If name_vec is not NULL display legend
+  if (!is.null(name_vec)) {
+    format_text <- function(name, auc) sprintf("%s (%.3f)", name, auc)
+    legend_text <- mapply(format_text, name_vec, auc_vec)
+    legend("bottomright", inset = 0.03, lty = 1, lwd = 2,
+           cex = 1.2, bty = "o", text.width = 0.35,
+           legend = legend_text, col = color_index)
+  }
+  return(auc_vec)
+}
+
+eval_batch_effects <- function(df, batch_info, class_info) {
   # Tranpose df to n x p
   pca_obj <- prcomp(t(df), center = T, scale. = F)
   # Eigenvalues
@@ -454,17 +616,17 @@ eval.batch_effects <- function(df, batch_info, class_info) {
   
   # Libraries: cluster, gpca
   # Argument: PC coordinates for single PC
-  calc.pc_var <- function(vec) {
+  calc_pc_var <- function(vec) {
     # Argument: ANOVA attributes; Calculates percentage of variance
-    # SS_between/SS_between + SS_within
-    calc.var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
+    # SS_between/(SS_between + SS_within)
+    calc_var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
     pc_metadata <- data.frame(pc = vec,
                               batch = as.factor(batch_info),
                               class = as.factor(class_info))
     batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
     class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
-    return(c(calc.var_percentage(batch_anova_attr),
-             calc.var_percentage(class_anova_attr)))
+    return(c(calc_var_percentage(batch_anova_attr),
+             calc_var_percentage(class_anova_attr)))
   }
   var_composition <- sapply(pca_df, calc.pc_var)
   # Dataframe showing prop. var and pi_BE and pi_BV
@@ -475,34 +637,42 @@ eval.batch_effects <- function(df, batch_info, class_info) {
   total_class_pct <- sum(pca_var_df$var_pct * pca_var_df$class_pct)
   print(head(pca_var_df))
   
+  library(cluster)
   # Calculating average silhouette scores
   dist_pca <- dist(pca_df, "euclidean")
   batch_df <- silhouette(batch_info, dist_pca)
   class_df <- silhouette(class_info, dist_pca)
   
   # gPCA
-  gpca_obj <- gPCA.batchdetect(t(df), batch_info)
+  # gpca_obj <- gPCA.batchdetect(t(df), batch_info)
   
+  # # Collating results
+  # metrics <- c(total_batch_pct*100, total_class_pct*100,
+  #              mean(batch_df[,3]), mean(class_df[,3]),
+  #              gpca_obj$delta, gpca_obj$p.val)
   # Collating results
   metrics <- c(total_batch_pct*100, total_class_pct*100,
-               mean(batch_df[,3]), mean(class_df[,3]),
-               gpca_obj$delta, gpca_obj$p.val)
+               mean(batch_df[,3]), mean(class_df[,3]))
+  
   # names(metrics) <- c("pi_BE", "pi_BV",
   #                     "silhouette_BE", "silhouette_BV",
-  #                     "gPCA_delta", "gPCA_pvalue")
+  #                     "gPCA_delta", "gPCA_pvalue")[]
   print(xtable(t(matrix(metrics)), digits = 3))
   cat(metrics, sep = "\t")
   return(metrics)
 }
 
+calc_var_preservation <- function(df_bef, df_aft) {
+  return(sum(apply(df_aft, 1, var))/sum(apply(df_bef, 1, var)))
+}
 
 #' Calculates proportion of variance in dataframe due to batch effects and biological variable of interest
 #' 
 #' @param df p x n gene expression dataframe (p: no. of probes, n: no. of samples)
 #' @param batch_info vector containing batch labels of samples (ordered the same way as in the dataframe)
 #' @param class_info vector containing class labels of samples (ordered the same way as in the dataframe)
-#' @return Vector containing total proportion of variance in dataframe due to batch effects and biological variable of interest, respectively
-calc.var_prop <- function(df, batch_info, class_info) {
+#' @return vector containing total proportion of variance in dataframe due to batch effects and biological variable of interest, respectively
+calc_var_prop <- function(df, batch_info, class_info) {
   # Tranpose df to n x p
   pca_obj <- prcomp(t(df), center = T, scale. = F)
   # Eigenvalues
@@ -513,19 +683,19 @@ calc.var_prop <- function(df, batch_info, class_info) {
   
   # Libraries: cluster, gpca
   # Argument: PC coordinates for single PC
-  calc.pc_var <- function(vec) {
+  calc_pc_var <- function(vec) {
     # Argument: ANOVA attributes; Calculates percentage of variance
     # SS_between/SS_between + SS_within
-    calc.var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
+    calc_var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
     pc_metadata <- data.frame(pc = vec,
                               batch = as.factor(batch_info),
                               class = as.factor(class_info))
     batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
     class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
-    return(c(calc.var_percentage(batch_anova_attr),
-             calc.var_percentage(class_anova_attr)))
+    return(c(calc_var_percentage(batch_anova_attr),
+             calc_var_percentage(class_anova_attr)))
   }
-  var_composition <- sapply(pca_df, calc.pc_var)
+  var_composition <- sapply(pca_df, calc_pc_var)
   # Dataframe showing prop. var and pi_BE and pi_BV
   pca_var_df <- data.frame(var_pct,
                            batch_pct = var_composition[1,],
@@ -535,4 +705,40 @@ calc.var_prop <- function(df, batch_info, class_info) {
   metrics <- c(total_batch_pct, total_class_pct)
   names(metrics) <- c("var_batch", "var_class")
   return(metrics)
+}
+
+#' Calculates l2-norm of vector
+calcL2Norm <- function(vec) sqrt(sum(vec^2))
+
+#' Calculates cosine similarity between two vectors
+#' @return Scalar cos(theta)
+calcCosineSim <- function(vec1, vec2) {
+  sum(vec1*vec2)/(calcL2Norm(vec1)*calcL2Norm(vec2))
+}
+
+#' Converts radians to degrees
+rad2degree <- function(rad) rad/pi * 180
+
+#' Calculates angle between two vectors (in degrees)
+calcAngleVectors <- function(vec1, vec2) {
+  # Prevents error when number is incorrectly calculated..
+  # to be slightly above 1
+  cosine_sim <- calcCosineSim(vec1, vec2)
+  if (cosine_sim > 1) {
+    print(sprintf("Cosine similarity: %.20f -> Rounded off!", cosine_sim))
+    cosine_sim <- 1
+  }
+  return(rad2degree(acos(cosine_sim)))
+}
+
+#' @param rad rotation angle (counter-clockwise) in radians
+#' @return rotation matrix for 2D vector
+calcRotationMatrix <- function(rad) matrix(c(cos(rad), -sin(rad),
+                                             sin(rad), cos(rad)),
+                                           2, 2, byrow = T)
+
+# Generate default ggplot colours
+generateGgplotColours <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  return(hcl(h = hues, c = 100, l = 65)[1:n])
 }

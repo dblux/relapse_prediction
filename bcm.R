@@ -1,7 +1,8 @@
 # Arguments: combined df, batch, class and order info
 # Order info: Left most is anchor data (Recursively corrected)
 # Returns: Combined df of corrected data
-norm.CBC <- function(df, batch_info, class_info, order_batch, correction_wpath = "dump/correction_vectors.tsv") {
+correctPairwiseBCM <- function(df, batch_info, class_info, order_batch,
+                       correction_wpath = "dump/correction_vectors.tsv") {
   # Arguments: df1 is anchor batch, df2 is second batch
   # Returns: Combined df of df2 mapped to df1
   pairwise_correction <- function(df1, df2) {
@@ -112,25 +113,16 @@ norm.CBC <- function(df, batch_info, class_info, order_batch, correction_wpath =
   # ERROR: CLASS HAS TO BE GIVEN IN ALPHABETS!!!
 }
 
-# calc.l2_norm
-norm.BCM <- function(df, batch_info, class_info, ref_batch = 1,  correction_wpath = "dump/correction_vectors.tsv") {
-  # df <- odd_maqc
-  # batch_info <- odd_batch_info
-  # class_info <- odd_class_info
-  # ref_batch <- 1
-  
-  col_order <- colnames(df)
-  class_factor <- as.factor(class_info)
-  batch_factor <- as.factor(batch_info)
+
+correctRefBCM <- function(df1, metadata_df, ref_batch = 1,
+                          correction_wpath = "dump/correction_vectors.tsv") {
+  # Obtaining batch and class annotations
+  batch_factor <- as.factor(metadata_df[colnames(df1),"batch"])
+  class_factor <- metadata_df[colnames(df1),"class"]
   batch_levels <- levels(batch_factor)
-  # Create metadata df
-  metadata_df <- data.frame(batch_factor, class_factor)
-  rownames(metadata_df) <- colnames(df)
   
   # Split df by batches into list
-  list_batch_df <- lapply(batch_levels, function(batch_id) df[, batch_factor == batch_id])
-  names(list_batch_df) <- batch_levels
-  
+  list_batch_df <- split.default(df1, batch_factor)
   # Define first reference batch and list of other df
   ref_df <- list_batch_df[[ref_batch]]
   list_df <- list_batch_df[-ref_batch]
@@ -142,12 +134,17 @@ norm.BCM <- function(df, batch_info, class_info, ref_batch = 1,  correction_wpat
     if (length(list_df) == 0) return(ref_df)
     else {
       # BATCH EFFECT CORRECTION
-      ref_class_info <- as.character(metadata_df[colnames(ref_df), "class_factor"])
+      ref_class_info <- as.character(metadata_df[colnames(ref_df), "class"])
       ref_levels <- unique(ref_class_info)
       
-      list_other_classes <- lapply(list_df, function(df) metadata_df[colnames(df), "class_factor"])
-      # Logical vector selecting batches that have at least one intersecting class
-      is_intersect <- sapply(list_other_classes, function(vec) any(unique(vec) %in% ref_levels))
+      list_other_classes <- lapply(
+        list_df, function(nonref_df) metadata_df[colnames(nonref_df), "class"]
+      )
+      
+      # Logical vector selecting batches that have at least one intersecting
+      # class
+      is_intersect <- sapply(list_other_classes,
+                             function(vec) any(unique(vec) %in% ref_levels))
       list_intersect_batches <- list_df[is_intersect]
       # To be returned
       list_remaining <- list_df[!is_intersect]
@@ -166,7 +163,8 @@ norm.BCM <- function(df, batch_info, class_info, ref_batch = 1,  correction_wpat
       # Return: Corrected df of a single batch
       # Global: Variables belonging to ref_batch
       single_correction <- function(other_df) {
-        other_class_info <- as.character(metadata_df[colnames(other_df), "class_factor"])
+        other_class_info <- as.character(metadata_df[colnames(other_df),
+                                                     "class"])
         print("other_class_info"); print(other_class_info)
         other_levels <- unique(other_class_info)
         # Find classes that appear in both batches (Impt to sort!!!)
@@ -178,14 +176,18 @@ norm.BCM <- function(df, batch_info, class_info, ref_batch = 1,  correction_wpat
         list_other_df <- list_other_df[order(names(list_other_df))]
         print(str(other_df))
         print(str(list_other_df))
-        list_other_centroids <- lapply(list_other_df, apply, 1, mean, trim = 0.2)
+        list_other_centroids <- lapply(list_other_df,
+                                       apply, 1, mean, trim = 0.2)
         str(list_other_centroids)
         
         # Calculate correction vectors for intersect classes
         # Anchor: df1, hence df2_centroid - df1_centroid (order matters!!!)
-        calc.correction <-  function(class_char) list_other_centroids[[class_char]] - list_ref_centroids[[class_char]]
-        # Convert to df and name according to classes
-        correction_vectors <- data.frame(lapply(intersect_classes, calc.correction))
+        calc.correction <-  function(class_char) {
+          list_other_centroids[[class_char]] - list_ref_centroids[[class_char]]
+        }
+          # Convert to df and name according to classes
+        correction_vectors <- data.frame(lapply(intersect_classes,
+                                                calc.correction))
         colnames(correction_vectors) <- intersect_classes
         
         # Identify classes in other_df that are not present in intersect_classes
@@ -227,15 +229,16 @@ norm.BCM <- function(df, batch_info, class_info, ref_batch = 1,  correction_wpat
         print(colnames(correction_vectors))
         stopifnot(identical(names(list_other_df), colnames(correction_vectors)))
         # Apply correction for each class in df2 (list_class_df2)
-        list_other_corrected <- unname(mapply(function(df,vec) df-vec,
-                                            list_other_df, correction_vectors,
-                                            SIMPLIFY = F))
+        list_other_corrected <- unname(mapply(function(df, vec) df-vec,
+                                              list_other_df, correction_vectors,
+                                              SIMPLIFY = F))
         corrected_df <- do.call(cbind, list_other_corrected)
         # Replace all negative values with 0
         corrected_df[corrected_df < 0] <- 0
         return(corrected_df)
       }
-      list_corrected_df <- unname(lapply(list_intersect_batches, single_correction))
+      list_corrected_df <- unname(lapply(list_intersect_batches,
+                                         single_correction))
       # Corrected df contains all samples
       final_df <- cbind(ref_df, do.call(cbind, list_corrected_df))
       # Replace all negative values with 0
@@ -247,5 +250,129 @@ norm.BCM <- function(df, batch_info, class_info, ref_batch = 1,  correction_wpat
   
   final_df <- recursive_correction(ref_df, list_df)
   # Sort the corrected df
-  return(final_df[,col_order])
+  return(final_df[,colnames(df1)])
+}
+
+# Global BCM (Using D0 correction vector)
+correctGlobalBCM <- function(df1, batch_df) {
+  df1_batch <- batch_df[colnames(df1), "batch"]
+  # TODO: Error if df1 is array instead of df
+  # Split df by batches into list
+  list_batch_df <- split.default(df1, df1_batch)
+  # Subset only D0 patients in each batch
+  list_subset_d0 <- lapply(list_batch_df,
+                           function(df1) df1[,endsWith(colnames(df1), "D0"),
+                                             drop = F])
+  print(str(list_subset_d0))
+  # Calculate trimmed mean centroids
+  list_d0_centroids <- lapply(list_subset_d0,
+                              function(df1) apply(df1, 1, mean, trim = 0.2))
+  # Use batch 2 as reference batch
+  list_correction_vec <- lapply(list_d0_centroids,
+                                function(vec) vec - list_d0_centroids[[2]])
+  stopifnot(identical(names(list_batch_df), names(list_correction_vec)))
+  list_corrected_df <- mapply(function(df1, vec) df1 - vec,
+                              list_batch_df,
+                              list_correction_vec)
+  corrected_df <- do.call(cbind, unname(list_corrected_df))
+  corrected_df[corrected_df < 0] <- 0
+  # Re-ordering of columns
+  bcm_df <- corrected_df[,colnames(df1)]
+  return(bcm_df)
+}
+
+# All columns of the metadata have to be factors
+# Have to have column names "batch" and "class"
+### PAIRWISE PCA ###
+correctSVDBCM <- function(df1, metadata_df, ref_batch) {
+  # Free variables: batch_pairwise, class_pch, pc_labels, plot_title
+  # mean_gradient, ref_coef, other_coef, batch_vec_pca
+  plotPairPCA <- function(df1) {
+    ggplot(df1, aes(x = PC1, y = PC2, fill = batch_pairwise)) +
+      geom_point(size = 3, shape = class_pch, show.legend = F) + 
+      geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
+      geom_hline(yintercept = 0, color = "black", alpha = 0.5) +
+      geom_abline(slope = ref_coef[2], intercept = ref_coef[1],
+                  color = "blue", alpha = 0.5) +
+      geom_abline(slope = other_coef[2], intercept = other_coef[1],
+                  color = "blue", alpha = 0.5) +
+      geom_abline(slope = mean_gradient,
+                  color = "orange", alpha = 0.5) +
+      geom_abline(slope = batch_vec_pca[2]/batch_vec_pca[1],
+                  color = "orange", alpha = 0.5) +
+      labs(x = pc_labels[1], y = pc_labels[2], title = plot_title) +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      coord_fixed(ratio = 1)  
+  }
+  
+  all_batch_info <- metadata_df[colnames(df1), "batch"]
+  # Split df by batches into list
+  list_batch_df <- split.default(df1, all_batch_info)
+  # Initialise empty lists
+  list_plot <- list()
+  list_corrected_plot <- list()
+  list_corrected_df <- list()
+  
+  j <- 1
+  ref_df <- list_batch_df[[ref_batch]]
+  # Convert factor into numeric before unique
+  batch_ids <- unique(as.numeric(as.character(all_batch_info)))
+  nonref_ids <- batch_ids[batch_ids != ref_batch]
+  print(nonref_ids)
+  for (i in nonref_ids) {
+    # i <- 1 # TODO
+    other_df <- list_batch_df[[i]]
+    pair_batch <- cbind(ref_df, other_df)
+    pair_prcomp <- prcomp(t(pair_batch), scale. = F)
+    # Subset samples from ref_df
+    ref_pca <- pair_prcomp$x[1:ncol(ref_df),]
+    other_pca <- pair_prcomp$x[-(1:ncol(ref_df)),]
+    
+    # Linear regression to get gradient
+    ref_coef <- coef(lm(ref_pca[,2] ~ ref_pca[,1]))
+    other_coef <- coef(lm(other_pca[,2] ~ other_pca[,1]))
+    mean_gradient <- mean(c(ref_coef[2], other_coef[2]))
+    # Biological vector in PCA space (unit norm)
+    bio_vec_pca <- c(1, mean_gradient) / calcL2Norm(c(1, mean_gradient))
+    rotation_90 <- calcRotationMatrix(pi/2)
+    # Batch effect vector in PCA space (unit norm)
+    batch_vec_pca <- rotation_90 %*% bio_vec_pca
+    print(mean_gradient)
+    print(as.vector(batch_vec_pca))
+    
+    ## Plotting parameters
+    plot_title <- sprintf("B2 vs. B%d", i)
+    eigenvalues <- (pair_prcomp$sdev)^2
+    var_pct <- eigenvalues[1:5]/sum(eigenvalues)
+    pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pct*100)
+    
+    batch_pairwise <- metadata_df[colnames(pair_batch), "batch"]
+    
+    class_pairwise <- metadata_df[colnames(pair_batch), "class"]
+    all_pch <- 21:25
+    class_pch <- all_pch[class_pairwise]
+    
+    # Plot BEFORE CORRECTION
+    list_plot[[j]] <- plotPairPCA(data.frame(rbind(ref_pca, other_pca)))
+    
+    # BCM: In PC1 & PC2 subspace
+    other_ref_vec <- colMeans(ref_pca[,1:2]) - colMeans(other_pca[,1:2])
+    other_pca[,1:2] <- sweep(other_pca[,1:2], 2, other_ref_vec, `+`)
+    # Transform corrected non-reference batch to original space
+    rotated_other <- other_pca %*% t(pair_prcomp$rotation)
+    # Return corrected non-reference df
+    list_corrected_df[[j]] <- t(sweep(rotated_other, 2,
+                                      pair_prcomp$center, "+"))
+    
+    # Plot single pairwise
+    list_corrected_plot[[j]] <- plotPairPCA(data.frame(rbind(ref_pca,
+                                                             other_pca)))
+    j <- j + 1
+  }
+  # Combine reference and corrected non-references
+  # Reorder columns according to initial df
+  corrected_nonref_df <- do.call(cbind, list_corrected_df)
+  corrected_df <- cbind(ref_df, corrected_nonref_df)[,colnames(df1)]
+  return(list(data = corrected_df, plot = list_plot,
+              corrected_plot = list_corrected_plot))
 }

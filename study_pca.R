@@ -1,3 +1,7 @@
+source("../functions.R")
+
+# Execute together with set.seed
+set.seed(1)
 x <- c(rnorm(1000,-5,1), rnorm(1000,6,1)) 
 y <- c(rnorm(1000,-5,1), rnorm(1000,6,1))
 
@@ -6,31 +10,48 @@ plot(x, y, xlim = c(-20,20), ylim = c(-20,20))
 
 arr <- cbind(x,y)
 pca_obj <- prcomp(arr)
+# Plot PCA coordinates
 plot(pca_obj$x, xlim = c(-10,10), ylim = c(-10,10))
-pca_var <- pca_obj$sdev^2
 
-pca_var/sum(pca_var)
+# Total variance before and after PCA remains the same
+sum(apply(arr, 2, var))
+sum(apply(pca_obj$x, 2, var))
 
-old_percentage_var
+# Eigenvalue represents the variance along each eigenvector
+pca_obj$sdev^2 # Eigenvalue
+apply(pca_obj$x, 2, var)
+
+# prcomp mean-centers data by default
+centered_arr <- scale(arr, scale = F)
+# prcomp performs svd on original data
+svd_1 <- svd(centered_arr)
+# Rotation matrix is given by matrix v
+svd_1$v
+pca_obj$rotation
+# Principal component scores is given by matrix u*d
+head(svd_1$u %*% diag(svd_1$d))
+head(pca_obj$x)
+# Principal component scores can subsequently be given by x*v
+head(centered_arr %*% svd_1$v)
+# Eigenvalue can be calculated by d^2/(n-1)
+pca_obj$sdev^2
+svd_1$d^2/1999
+
+# prcomp can be computed more efficiently by:
+# Performing svd on t(x)*x
+# t(x)*x = v*d^2*t(v)
+# Calculate principal component scores using xv
+svd_2 <- svd(t(centered_arr) %*% centered_arr)
+# v
+svd_2$u
+# d^2
+pca_obj$sdev^2
+svd_2$d
+# v
+svd_2$v
 pca_obj$rotation
 
-M <- matrix(rnorm(50,0,1), 5, 10)
-pca_obj <- prcomp(M, center = F, scale. = F)
+# Eigenvectors are defined by the rotation matrix
+# Eigenvectors all have unit l2norm even if original data is not scaled to have unit variance!
+apply(pca_obj$rotation, 2, calc_l2norm)
 
-centered_M <- sweep(M, 2, colMeans(M), "-")
-svd_matrices <- svd(M)
-M %*% svd_matrices$v
-
-pca_obj$rotation
-svd_matrices$v
-diag_d <- diag(svd_matrices$d)
-
-pca_obj$x
-pca_obj$x[3,2]/
-svd_matrices$u %*% svd_matrices$d
-
-M %*% t(svd_matrices$v)
-svd_matrices$u
-
-M <- matrix(rnorm(50,0,1), 5, 10)
-svd_matrices <- svd(M)
