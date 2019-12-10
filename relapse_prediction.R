@@ -1,9 +1,9 @@
-# library(xtable)
+library(xtable)
 # library(Rtsne)
 # library(dendextend)
 # library(gPCA)
 # library(cluster)
-library(pheatmap)
+# library(pheatmap)
 library(sva)
 # library(scran)
 library(Harman)
@@ -13,6 +13,7 @@ library(ggplot2)
 library(cowplot)
 library(reshape2)
 library(RColorBrewer)
+library(dplyr)
 
 source("../functions.R")
 source("bcm.R")
@@ -38,34 +39,6 @@ plot_mean <- function(df, batch_vec1) {
     facet_wrap(factor(batch_vec1), scales = "free_x") +
     theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
   return(mean_scatter)
-}
-
-# Dataframe has probesets as rows and patients as columns
-# Dataframe has patients with D0 and D8 data
-select_probes <- function(df) {
-  # Row vector is halved into two vectors
-  # Elements in the two vectors are assumed to form a pair according to their index!!!
-  row_pvalue <- function(row_vec) {
-    half_index <- length(row_vec)/2
-    # Wilcoxon signed rank takes x-y
-    wilcox_obj <- wilcox.test(row_vec[1:half_index],
-                              row_vec[-(1:half_index)],
-                              paired = T)
-    return(wilcox_obj$p.value)
-  }
-  # Calculating significance of probeset using Wilcoxon signed rank test
-  signedrank_pvalue <- apply(df, 1, row_pvalue)
-  
-  # Mean of D8 - Mean of D0 for every probeset
-  effect_size <- rowMeans(df[,-(1:210)]) - rowMeans(df[,1:210])
-  print(paste("No.of effect size == 0:", sum(effect_size == 0)))
-  effect_direction <- ifelse(effect_size >= 0, "up", "down")
-
-  # Selection of top 500 down-regulated probesets
-  probes_df <- data.frame(signedrank_pvalue, effect_direction)
-  sorted_probes <- probes_df[order(probes_df$signedrank_pvalue),]
-  downreg_probes <- rownames(sorted_probes)[sorted_probes$effect_direction == "down"][1:500]
-  return(downreg_probes)
 }
 
 # Selecting drug responsive genes between D0 and D8
@@ -94,218 +67,81 @@ selectFeatures <- function(df1, metadata_df,
 
 # All dataframes have samples in rows and features in columns
 # D0 centroid used to define D0-Normal vector
-calc_erm1 <- function(response_df, normal_df) {
-  num_patients <- nrow(response_df)/2
-  leukemia_centroid <- apply(response_df[1:num_patients,], 2, median)
+calcERM <- function(response_df, normal_df, labels_df) {
+  # Split response df into D0 and D8 df
+  n <- nrow(response_df)/2
+  d0_df <- response_df[1:n,]
+  d8_df <- response_df[-(1:n),]
+  stopifnot(substring(rownames(d8_df),1,4) == substring(rownames(d0_df),1,4))
+  
+  # Calculate centroids
+  leuk_centroid <- apply(d0_df, 2, median)
   normal_centroid <- apply(normal_df, 2, median)
   
-  # Calculation of constant vector factor
-  leukemia_normal <- normal_centroid - leukemia_centroid
-  unit_leukemia_normal <- leukemia_normal/calcL2Norm(leukemia_normal)
+  # Calculate leuk-normal unit vector
+  leuk_normal <- normal_centroid - leuk_centroid
+  unit_leuk_normal <- leuk_normal/calcL2Norm(leuk_normal)
   
   # Assume that patients from top rows match correspondingly with bottom rows
   # Calculate vector by: D8-D0
-  d0d8_hstack <- response_df[-(1:num_patients),] - response_df[1:num_patients,]
+  d0_d8_hstack <- d8_df - d0_df
   # Multiplication of erm_factor is propagated through every column
-  erm <- colSums(t(d0d8_hstack) * unit_leukemia_normal)
+  ### ERM1 ###
+  erm1 <- colSums(t(d0_d8_hstack) * unit_leuk_normal)
   # Vertical stack of individual D0-Normal vectors
-  d0normal_vec_vstack <- normal_centroid - t(response_df[1:num_patients,])
-  d0normal_scalar_proj <- colSums(d0normal_vec_vstack * unit_leukemia_normal)
-  erm_ratio <- erm/d0normal_scalar_proj
-  print(tail(names(erm)))
-  print(tail(names(erm_ratio)))
-  return(cbind(erm, erm_ratio))
-}
-
-# All dataframes have patients as rows and probesets/features as columns
-calc_erm2 <- function(response_df, normal_df, leukemia_df = NA) {
-  num_patients <- nrow(response_df)/2
-  normal_centroid <- apply(normal_df, 2, median)
-  l2_norm <- function(vec) sqrt(sum(vec^2))
-  # D0-Normal vectors for each patient
-  d0normal_vec_vstack <- normal_centroid - t(response_df[1:num_patients,])
-  l2norm_d0normal <- apply(d0normal_vec_vstack, 2, l2_norm)
-  # TODO: mapply(`/`, df1, l2norm_vec)
-  l2norm_arr <- matrix(l2norm_d0normal,
-                       ncol(response_df),
-                       length(l2norm_d0normal),
-                       byrow = T)
-  # Divided by l2norm
-  unit_d0normal_vstack <- d0normal_vec_vstack/l2norm_arr
-
-  # Assume that patients from top rows match correspondingly with bottom rows
-  # Calculate vector by: D8-D0
-  d0d8_hstack <- response_df[-(1:num_patients),] - response_df[1:num_patients,]
-  # Element-wise multiplication of two df
-  erm <- colSums(t(d0d8_hstack) * unit_d0normal_vstack)
-  erm_ratio <- erm/l2norm_d0normal
-  print(tail(names(erm)))
-  print(tail(names(erm_ratio)))
-  return(cbind(erm, erm_ratio))
-}
-
-# Calculating ERM distance (PC1)
-calc_erm3 <- function(response_df, normal_df) {
-  num_patient <- nrow(response_df)/2
-  response_pc1 <- response_df[,1]
-  normal_pc1 <- normal_df[,1]
-  d0d8_pc1 <- response_pc1[-(1:num_patient)] - response_pc1[1:num_patient]
-  d0normal_pc1 <- median(normal_pc1) - response_pc1[1:num_patient]
-  print(tail(names(d0d8_pc1)))
-  print(tail(names(d0d8_pc1/d0normal_pc1)))
-  return(cbind(erm = d0d8_pc1, erm_ratio = d0d8_pc1/d0normal_pc1))
-}
-
-# Calculates l2norm of D0D8 vector
-# Calculates l2norm(D8) - l2norm(D0)
-calc_erm4 <- function(response_df) {
-  num_patient <- nrow(response_df)/2
-  d0_df <- response_df[1:num_patient,]
-  d8_df <- response_df[-(1:num_patient),]
+  d0_normal_vstack <- normal_centroid - t(d0_df)
+  ### D0-Normal projection ###
+  d0_normal_proj <- colSums(d0_normal_vstack * unit_leuk_normal)
+  ### ERM1 Ratio ###
+  erm1_ratio <- erm1/d0_normal_proj
   
-  stopifnot(nrow(d8_df) == nrow(d0_df))
-  d0d8_df <- d8_df - d0_df
-  d0d8_l2norm <- apply(d0d8_df, 1, calcL2Norm)
+  d8_normal_vstack <- normal_centroid - t(d8_df)
+  ### D8-Normal projection ###
+  d8_normal_proj <- colSums(d8_normal_vstack * unit_leuk_normal)
   
-  d0_l2norm <- apply(d0_df, 1, calcL2Norm)
-  d8_l2norm <- apply(d8_df, 1, calcL2Norm)
-  diff_l2norm <- d8_l2norm - d0_l2norm
+  stopifnot(identical(names(erm1), names(erm1_ratio)))
+  
+  # Calculate vstack of unit D0-Normal vectors
+  l2norm_d0_normal <- apply(d0_normal_vstack, 2, calcL2Norm)
+  unit_d0_normal_vstack <- sweep(d0_normal_vstack, 2, l2norm_d0_normal, "/")
+  
+  ### ERM2 ###
+  erm2 <- colSums(t(d0_d8_hstack) * unit_d0_normal_vstack)
+  erm2_ratio <- erm2/l2norm_d0_normal
+  
+  stopifnot(identical(names(erm2), names(erm2_ratio)))
+  
+  ### ERM3 ###
+  erm3 <- d8_df[,1] - d0_df[,1]
+  # Divide by D0-Normal along PC1
+  erm3_ratio <- erm3/(median(normal_df[,1]) - d0_df[,1])
+  print(class(erm3))
+  print(class(median(normal_df[,1]) - d0_df[,1]))
+  print(head(erm3))
+  print(head(median(normal_df[,1]) - d0_df[,1]))
+  
+  stopifnot(identical(names(erm3), names(erm3_ratio)))
+  
+  ### l2norm ###
+  l2norm_d0_d8 <- apply(d0_d8_hstack, 1, calcL2Norm)
+  l2norm_d0 <- apply(d0_df, 1, calcL2Norm)
+  l2norm_d8 <- apply(d8_df, 1, calcL2Norm)
+  diff_l2norm <- l2norm_d8 - l2norm_d0
   
   # Angle between D0 and D8
-  angle_d0d8 <- mapply(calcAngleVectors, data.frame(t(d0_df)), data.frame(t(d8_df)))
-  print(tail(names(d0d8_l2norm)))
-  print(tail(names(diff_l2norm)))
-  print(tail(names(angle_d0d8)))
-  return(data.frame(d0d8_l2norm, diff_l2norm, angle_d0d8))
-}
-
-collate_results <- function(features_df1, features_df2, features_df3,
-                            features_df4, yeoh_label) {
-  features_df <- cbind(features_df1, features_df2, features_df3, features_df4)
-  colnames(features_df) <- c("erm1", "erm1_ratio",
-                             "erm2", "erm2_ratio",
-                             "erm3", "erm3_ratio",
-                             "d0d8_l2norm", "diff_l2norm","angle_d0d8")
-  row_index <- substring(rownames(features_df),1,4)
-  # print(row_index)
-  labels_yeoh <- yeoh_label[row_index, 5:6]
-  results_df <- cbind(features_df, labels_yeoh)
-  rownames(results_df) <- row_index
+  angle_d0_d8 <- mapply(calcAngleVectors,
+                        data.frame(t(d0_df)), data.frame(t(d8_df)))
+  
+  ### Concatenate all features ###
+  features_df <- cbind(erm1, erm1_ratio, erm2, erm2_ratio, erm3, erm3_ratio,
+                       l2norm_d0_d8, diff_l2norm, angle_d0_d8,
+                       d0_normal_proj, d8_normal_proj)
+  row_idxstr <- substring(rownames(features_df),1,4)
+  # Concatenate features with labels
+  ### RESULTS DF ###
+  results_df <- cbind(features_df, labels_df[row_idxstr, c(1,5)])
+  rownames(results_df) <- row_idxstr
   return(results_df)
-}
-
-collate_results1 <- function(features_df1, features_df2, features_df3,
-                            features_df4, yeoh_label) {
-  features_df <- cbind(features_df1, features_df2, features_df3, features_df4)
-  colnames(features_df) <- c("erm1", "erm1_ratio",
-                             "erm2", "erm2_ratio",
-                             "erm3", "erm3_ratio",
-                             "d0d8_l2norm", "diff_l2norm","angle_d0d8")
-  row_index <- substring(rownames(features_df),1,4)
-  # print(row_index)
-  labels_yeoh <- yeoh_label[row_index, c(1:2,5:6)]
-  results_df <- cbind(features_df, labels_yeoh)
-  rownames(results_df) <- row_index
-  return(results_df)
-}
-
-calcERM_PCA <- function(df1, metadata_df) {
-  class_info <- metadata_df[colnames(df1), "class"]
-  norm_logvec <- class_info == "N"
-  
-  pca_obj <- prcomp(t(df1))
-  eigenvalues <- (pca_obj$sdev)^2
-  var_proportion <- eigenvalues/sum(eigenvalues)
-  # Use till PC15 to account for at least 70% variance
-  # Identify PC that has just above 70% variance
-  pc_idx <- which.max(cumsum(var_proportion) > 0.70)
-  print(paste0("PC", pc_idx))
-  # PCA: Coordinates
-  pca_coord <- pca_obj$x[,1:pc_idx]
-  
-  # Response df and normal df
-  response_df <- pca_coord[!norm_logvec,]
-  normal_df <- pca_coord[norm_logvec,]
-  print(head(rownames(response_df)))
-  print(head(rownames(normal_df)))
-  
-  # Calculating ERM distance
-  features_df1 <- calc_erm1(response_df, normal_df)
-  features_df2 <- calc_erm2(response_df, normal_df)
-  features_df3 <- calc_erm3(response_df, normal_df)
-  features_df4 <- calc_erm4(response_df)
-  
-  results_df <- collate_results(features_df1, features_df2, features_df3,
-                                features_df4, yeoh_label)
-  return(results_df)
-}
-
-# Environment: yeoh_metadata
-plotPCA2D <- function(df, metadata) {
-  pca_obj <- prcomp(t(df))
-  pca_df <- as.data.frame(pca_obj$x[,1:6])
-  eigenvalues <- (pca_obj$sdev)^2
-  var_pc <- eigenvalues[1:5]/sum(eigenvalues)
-  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-  # Create plot_df by concatenating metadata labels to data
-  plot_df <- cbind(metadata[rownames(pca_df), c(3,6)], pca_df)
-  print(plot_df[1:3,])
-  pc1_pc2 <- ggplot(plot_df, aes(x = PC1, y = PC2)) +
-    geom_point(aes(col = factor(batch), shape = factor(time_point)),
-               size = 3, show.legend = F) +
-    xlab(pc_labels[1]) + ylab(pc_labels[2])
-  pc2_pc3 <- ggplot(plot_df, aes(x = PC2, y = PC3)) +
-    geom_point(aes(col = factor(batch), shape = factor(time_point)),
-               size = 3, show.legend = F) +
-    xlab(pc_labels[2]) + ylab(pc_labels[3])
-  pc1_pc3 <- ggplot(plot_df, aes(x = PC1, y = PC3)) +
-    geom_point(aes(col = factor(batch), shape = factor(time_point)),
-               size = 3, show.legend = F) +
-    xlab(pc_labels[1]) + ylab(pc_labels[3])
-  multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3,
-                         ncol = 3, nrow = 1)
-  return(multiplot)
-}
-
-plot_pca_2d <- function(untransformed_df, colour_vec, shape_vec = 21) {
-  pca_obj <- prcomp(t(untransformed_df))
-  df <- data.frame(pca_obj$x[,1:5])
-  eigenvalues <- (pca_obj$sdev)^2
-  var_pc <- eigenvalues[1:5]/sum(eigenvalues)
-  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-  
-  pca_scatter <- ggplot(df, aes(x = PC1, y = PC2)) +
-    geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
-    geom_hline(yintercept = 0, color = "black", alpha = 0.5) +
-    geom_point(size = 3, fill = colour_vec, shape = shape_vec, show.legend = F) +
-    labs(x = pc_labels[1], y = pc_labels[2], title = plot_title) +
-    theme(plot.title = element_text(hjust = 0.5))
-  return(pca_scatter)
-}
-
-# Environment: yeoh_metadata
-plot_pca1 <- function(df, batch_info, class_info, label_info) {
-  pca_obj <- prcomp(t(df))
-  pca_df <- as.data.frame(pca_obj$x[,1:6])
-  eigenvalues <- (pca_obj$sdev)^2
-  var_pc <- eigenvalues[1:5]/sum(eigenvalues)
-  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pc*100)
-  
-  pc1_pc2 <- ggplot(pca_df, aes(x = PC1, y = PC2)) +
-    geom_point(fill = batch_info, shape = class_info,
-               size = label_info, show.legend = F) +
-    xlab(pc_labels[1]) + ylab(pc_labels[2])
-  # pc2_pc3 <- ggplot(plot_df, aes(x = PC2, y = PC3)) +
-  #   geom_point(aes(col = factor(batch), shape = factor(time_point)),
-  #              size = 3, show.legend = F) +
-  #   xlab(pc_labels[2]) + ylab(pc_labels[3])
-  # pc1_pc3 <- ggplot(plot_df, aes(x = PC1, y = PC3)) +
-  #   geom_point(aes(col = factor(batch), shape = factor(time_point)),
-  #              size = 3, show.legend = F) +
-  #   xlab(pc_labels[1]) + ylab(pc_labels[3])
-  # multiplot <- plot_grid(pc1_pc2, pc2_pc3, pc1_pc3,
-  #                        ncol = 3, nrow = 1)
-  return(pc1_pc2)
 }
 
 # Plot PCA before selecting features
@@ -400,7 +236,6 @@ levels(yeoh_label$d33_mrd)[1] <- 0.00001
 yeoh_label$d33_mrd <- addNA(yeoh_label$d33_mrd)
 # Assign NA <- 0
 levels(yeoh_label$d33_mrd)[35] <- 0
-
 yeoh_label$d33_mrd <- as.numeric(as.character(yeoh_label$d33_mrd))
 
 # Removal of outlier samples and their associated pairs
@@ -419,25 +254,22 @@ yeoh_remission <- yeoh_d33[, paste0(d33_remission, "_D33")]
 yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
 
 # Create metadata df
-batch <- as.factor(yeoh_batch[colnames(yeoh_combined), "batch"])
-class <- rep(c("D0","D8","N"), c(208,208,45))
+batch_info <- as.factor(yeoh_batch[colnames(yeoh_combined), "batch"])
+class_info <- rep(c("D0","D8","N"), c(208,208,45))
 class_numeric <- rep(1:3, c(208,208,45))
-metadata_df <- data.frame(batch, class)
+metadata_df <- data.frame(batch_info, class_info)
 rownames(metadata_df) <- colnames(yeoh_combined)
 head(metadata_df)
 # Add subtype info to metadata
-subtype_info <- yeoh_label[substr(colnames(yeoh_combined), 1, 4), "subtype"]
-label_info <- as.factor(yeoh_label[substr(colnames(yeoh_combined), 1, 4),
+subtype <- yeoh_label[substr(colnames(yeoh_combined), 1, 4), "subtype"]
+label <- as.factor(yeoh_label[substr(colnames(yeoh_combined), 1, 4),
                                    "label"])
-full_metadata_df <- cbind(metadata_df, subtype_info, label_info)
+full_metadata_df <- cbind(metadata_df, subtype, label)
 
 ### SFL ###
-yeoh_1 <- normaliseMeanScaling(yeoh_combined, 500)
-yeoh_2 <- filterProbesets(yeoh_1, 0.3, metadata_df)
-yeoh_3 <- log2_transform(yeoh_2)
-
 processed_yeoh <- log2_transform(
-  filterProbesets(normaliseMeanScaling(yeoh_combined), 0.3, metadata_df))
+  filterProbesets(normaliseMeanScaling(yeoh_combined), 0.3, metadata_df)
+)
 
 # SUBSET DATA -------------------------------------------------------------
 # # Identify patients with D0 and D8 profiles from different batches
@@ -453,13 +285,8 @@ patients_diffbatch <- c("P107", "P110", "P112", "P113", "P114", "P118", "P168")
 # Taking out batch 5 samples and P107_D0 (its pair present in batch5)
 not_diffbatch <-
   !(substring(colnames(processed_yeoh), 1, 4) %in% patients_diffbatch)
-not_batch5 <- metadata_df[colnames(processed_yeoh), "batch"] != 5
+not_batch5 <- metadata_df[colnames(processed_yeoh), "batch_info"] != 5
 subset_yeoh <- processed_yeoh[, not_batch5 & not_diffbatch]
-
-# subset_batch <- metadata_df[colnames(subset_yeoh), "batch"]
-# subset_class <- substring(colnames(subset_yeoh), 6)
-# num_subset <- length(subset_class)
-# subset_class[(num_subset-2):num_subset] <- "N"
 
 # QUANTILE ---------------------------------------------------------
 ### QUANTILE (ALL)
@@ -1103,145 +930,7 @@ head(results_df[,c(1,8,9)])
 colour_label <- ifelse(results_df[,10] == 1, "tomato3", "darkolivegreen3")
 plot.pch_3d(results_df[,c(1,8,9)], colour_label)
 
-# GFS ---------------------------------------------------------------------
-yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
-scaled_yeoh <- norm.mean_scaling(yeoh_combined)
-# Filtering of probesets
-selected_probesets <- filter_probesets(scaled_yeoh, 0.1)
 
-filtered_yeoh <- yeoh_data[selected_probes,]
-
-# MILE data
-filtered_mile <- mile_data[selected_probes,]
-# log_mile <- log2_transform(filtered_mile)
-
-### GFS normalisation and selection of probesets
-gfs_yeoh <- norm_gfs(filtered_yeoh)
-
-# plot_tsne <- Rtsne(t(gfs_yeoh), dims = 2, perplexity = 50)
-# names_index <- colnames(gfs_yeoh)
-# batch_info <- yeoh_metadata[names_index,6]
-# batch_palette <- brewer.pal(9, "Set1")
-# batch_colour <- c(batch_palette[batch_info],
-#                   batch_palette[batch_info])
-# plot(plot_tsne$Y, col = batch_colour, pch = rep(c(17,19), each = 210))
-# pca_gfs_yeoh <- plot_pca(gfs_yeoh)
-# ggsave("dump/pca-yeoh_gfs.pdf", pca_gfs_yeoh,
-#        width = 12, height = 8)
-gfs_mile <- norm_gfs(filtered_mile)
-
-# # Selection of probesets according to paired t-test between D0 and D8
-# paired_pvalues <- calc_ttest(gfs_yeoh, 210, is_paired = T)
-# top_probesets <- names(sort(paired_pvalues, na.last = NA))[1:500]
-# select_gfs_yeoh <- gfs_yeoh[top_probesets,]
-
-# Selection of probesets according to unpaired t-test between normal and D0
-d0_normal <- cbind(gfs_yeoh[,1:210], gfs_mile[,751:824])
-# Filtering of new combined df
-selected_probes1 <- filter_probesets(d0_normal, 0.2)
-unpaired_pvalues <- calc_ttest(d0_normal[selected_probes1,], 210, is_paired = F)
-top_probesets <- names(sort(unpaired_pvalues, na.last = NA))[1:500]
-select_gfs_yeoh <- gfs_yeoh[top_probesets,]
-select_gfs_mile <- gfs_mile[top_probesets,]
-
-# # Selection of probesets with most variance
-# probeset_var <- apply(gfs_yeoh, 1, var)
-# top_probesets <- names(sort(probeset_var, decreasing = T)[1:500])
-# select_gfs_yeoh <- gfs_yeoh[top_probesets,]
-
-# plot_select_gfs <- plot_pca(select_gfs_yeoh, yeoh_metadata)
-# plot_select_gfs
-# ggsave("dump/pca-yeoh_gfs_ttest.pdf", plot_select_gfs,
-#        width = 12, height = 4)
-
-# QPSP --------------------------------------------------------------------
-# # Import CORUM df
-# raw_corum <- read.table("../info/CORUM/entrezId.txt",
-#                         sep = "\t", header = T, row.names = 1, stringsAsFactors = F)
-# # Only human complexes
-# human_corum <- raw_corum[raw_corum$Organism == "Human",]
-# list_corum <- strsplit(human_corum[,2], ';')
-# names(list_corum) <- rownames(human_corum)
-# head(list_corum)
-
-# Import NEA
-nea_df <- read.table(paste0("../diff_expr/data/subnetwork/nea-hsa/",
-                            "ovarian_cancer/geneset-nea_kegg_ovarian.tsv"),
-                     sep = "\t", header = T, stringsAsFactors = F)
-subnetwork_nea <- split(as.character(nea_df$gene_id), nea_df$subnetwork_id)
-
-# Removes affymetrix ambiguous and control probesets
-processed_yeoh <- removeProbesets(processed_yeoh)
-
-# Map probesets to IDs
-# Removes one-to-many probesets and probesets with no ID
-# Selects maximum if two probesets match to same gene
-# CHECK: What microarray platform is the data from?
-ANNOT_PROBESET_RPATH <- "../info/microarray/HG-U133A/annot_entrez-GPL96.tsv"
-entrez_yeoh <- affy2id(processed_yeoh, ANNOT_PROBESET_RPATH)
-
-# # Perform BCM before QPSP
-# bcm_yeoh <- correctGlobalBCM(entrez_yeoh, metadata_df)
-
-# Calculate QPSP profiles
-gfs_yeoh <- normaliseGFS(entrez_yeoh, num_intervals = 4)
-qpsp_yeoh <- calcQPSP(gfs_yeoh, subnetwork_nea)
-# Plot PCA before selecting features
-plotPCA3DYeoh(qpsp_yeoh, metadata_df)
-rgl.postscript("dump/pca_3d-qpsp_nea.pdf", "pdf")
-
-levels(full_metadata_df$subtype_info)
-
-# No need for feature selection as features have been reduced
-# Results for TEL-AML1
-# No need to explicitly remove samples with D0 and D8 in diff batch
-# Because they are not in TEL-AML1 subset
-# Remove batch 5
-SUBTYPE <- "E2A-PBX1"
-normal_pid <- paste0("N0", c(1,2,4))
-
-subtype_pid <- rownames(subset(full_metadata_df,
-                               subtype_info == SUBTYPE & class != "N"))
-subtype_yeoh <- qpsp_yeoh[,c(subtype_pid, normal_pid)]
-
-# # BCM on QPSP transformed data
-# bcm_telaml1_normal <- correctGlobalBCM(telaml1_normal, yeoh_batch)
-# plotPCA3DYeoh(bcm_telaml1_normal, metadata_df)
-# plot.pca_3d(bcm_telaml1_normal, batch_colour, timepoint_shape)
-# rgl.postscript("dump/pca_3d-qpsp_nea_telaml1_bcm.pdf", "pdf")
-
-# PCA
-pca_obj <- prcomp(t(subtype_yeoh))
-# PCA: Eigenvalues
-eigenvalues <- (pca_obj$sdev)^2
-variance_proportion <- eigenvalues/sum(eigenvalues)
-# Use till PC15 to account for at least 70% variance
-cumsum(variance_proportion)[1:50]
-# Identify PC that has just above 70% variance
-pc_ind <- which.max(cumsum(variance_proportion)[1:50] > 0.70)
-pc_ind # PC20
-# pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, (var_pc*100)[1:3])
-
-# PCA: Coordinates
-pca_coord <- pca_obj$x[,1:pc_ind]
-# Response df and normal df
-response_df <- pca_coord[1:length(subtype_pid),]
-normal_df <- pca_coord[-(1:length(subtype_pid)),]
-print(rownames(response_df))
-print(rownames(normal_df))
-
-# Calculating ERM distance
-features_df1 <- calc_erm1(response_df, normal_df)
-features_df2 <- calc_erm2(response_df, normal_df)
-features_df3 <- calc_erm3(response_df, normal_df)
-features_df4 <- calc_erm4(response_df)
-
-# results_df <- collate_results(features_df1, features_df2, features_df3,
-#                               features_df4, yeoh_label)
-
-# Collate MRD results as well
-results_df1 <- collate_results1(features_df1, features_df2, features_df3,
-                                features_df4, yeoh_label)
 # GLOBAL BCM (D0) ----------------------------------------------
 # Subtype of subsetted patients
 table(yeoh_label[unique(substring(colnames(subset_yeoh), 1, 4)), "subtype"])
@@ -1414,15 +1103,18 @@ plotMRD <- function(df1) {
   plot_mrd1 <- ggplot(df1) +
     geom_point(aes(x = d33_mrd, y = erm1, col = factor(label)),
                show.legend = F) +
-    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+    scale_color_manual(values = c("darkolivegreen3", "tomato3")) +
+    labs(x = bquote(-log[10](mrd_d33)))
   plot_mrd2 <- ggplot(df1) +
     geom_point(aes(x = d33_mrd, y = angle_d0d8, col = factor(label)),
                show.legend = F) +
-    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+    scale_color_manual(values = c("darkolivegreen3", "tomato3")) +
+    labs(x = bquote(-log[10](mrd_d33)))
   plot_mrd3 <- ggplot(df1) +
     geom_point(aes(x = d33_mrd, y = d0d8_l2norm, col = factor(label)),
                show.legend = F) +
-    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+    scale_color_manual(values = c("darkolivegreen3", "tomato3")) +
+    labs(x = bquote(-log[10](mrd_d33)))
   
   plot_mrd <- plot_grid(plot_mrd1, plot_mrd2, plot_mrd3, ncol = 3)
   
@@ -1431,7 +1123,8 @@ plotMRD <- function(df1) {
 
 mrd_plot <- plotMRD(results_df1)
 mrd_plot
-ggsave("dump/mrd-telaml1_qpsp.pdf",
+
+ggsave(sprintf("dump/mrd-%s_qpsp_bcmD0.pdf", SUBTYPE),
        mrd_plot, width = 12, height = 4)
 
 # EXPLORATION --------------------------------------------------
@@ -1758,16 +1451,128 @@ plot_pca1(b2n8_d0, 21)
 
 # PAIRWISE PCA ------------------------------------------------------------
 # Dataset wo batch 5 and ...
-bcm_obj <- correctBCM(subset_yeoh, metadata_df, 2)
-
+bcm_obj <- correctSVDBCM(subset_yeoh, metadata_df, 2)
 pairwise_pca <- do.call(plot_grid, c(bcm_obj$plot, nrow = 3, ncol = 3))
+corrected_pca <- do.call(plot_grid, c(bcm_obj$corrected_plot,
+                                      nrow = 3, ncol = 3))
 pairwise_pca
+
 ggsave("dump/pairwise_pca-foo.pdf",
        pairwise_pca, width = 11, height = 11)
 
+
 bcm_df <- bcm_obj$data
+
+x <- data.frame(PC1 = 1:5, PC2 = 1:5)
+y <- factor(LETTERS[1:5])
+baby <- y[c(2,2,2,1,1)]
+ggplot(x, aes(x=PC1, y=PC2)) +
+  geom_point(aes(fill = baby), pch = 21, size = 3)
+
 plotPCA3DYeoh(bcm_df, metadata_df)
 rgl.postscript("dump/pca_3d-bcm_pairwise_wo_batch5.pdf", "pdf")
 
 intersect_probesets <- selectFeatures(bcm_df, metadata_df)
 results_df <- calcERM_PCA(bcm_df[intersect_probesets,], metadata_df)
+
+# QPSP --------------------------------------------------------------------
+# Import NEA
+nea_df <- read.table(paste0("../diff_expr/data/subnetwork/nea-hsa/",
+                            "ovarian_cancer/geneset-nea_kegg_ovarian.tsv"),
+                     sep = "\t", header = T, stringsAsFactors = F)
+subnetwork_nea <- split(as.character(nea_df$gene_id), nea_df$subnetwork_id)
+
+# 1. Removes affymetrix ambiguous and control probesets
+# 2. Map probesets to IDs
+# Removes one-to-many probesets and probesets with no ID
+# Selects maximum if two probesets match to same gene
+# CHECK: What microarray platform is the data from?
+ANNOT_PROBESET_RPATH <- "../info/microarray/HG-U133A/annot_entrez-GPL96.tsv"
+entrez_yeoh <- affy2id(removeProbesets(subset_yeoh), ANNOT_PROBESET_RPATH)
+
+# # Perform BCM before QPSP
+# bcm_yeoh <- correctGlobalBCM(entrez_yeoh, metadata_df)
+
+# Calculate QPSP profiles
+gfs_yeoh <- normaliseGFS(entrez_yeoh, num_intervals = 4)
+qpsp_yeoh <- calcQPSP(gfs_yeoh, subnetwork_nea)
+
+# # Plot PCA before selecting features
+# plotPCA3DYeoh(qpsp_yeoh, metadata_df)
+# rgl.postscript("dump/pca_3d-qpsp_nea.pdf", "pdf")
+
+# No need for feature selection as features have been reduced
+SUBTYPE <- levels(full_metadata_df$subtype)[6]
+SUBTYPE
+normal_pid <- paste0("N0", c(1,2,4))
+
+subtype_pid <- rownames(subset(full_metadata_df,
+                               subtype == SUBTYPE & class != "N" & 
+                                 rownames(full_metadata_df) %in% 
+                                 colnames(qpsp_yeoh)))
+subset_pid <- c(subtype_pid, normal_pid)
+
+subtype_metadata <- full_metadata_df[subset_pid,]
+subtype_metadata
+# Subtype and normal samples
+subtype_qpsp <- qpsp_yeoh[,subset_pid]
+
+# BCM on QPSP transformed data
+bcm_qpsp <- correctGlobalBCM(subtype_qpsp, metadata_df)
+
+# PCA
+pca_obj <- prcomp(t(bcm_qpsp))
+# PCA: Eigenvalues
+eigenvalues <- (pca_obj$sdev)^2
+var_pc <- eigenvalues/sum(eigenvalues)
+# Use till PC15 to account for at least 70% variance
+cumsum(variance_proportion)[1:50]
+# Identify PC that has just above 70% variance
+pc_ind <- which.max(cumsum(variance_proportion)[1:50] > 0.70)
+pc_ind # PC20
+
+# PCA: Coordinates
+pca_coord <- pca_obj$x[,1:pc_ind]
+# Response df and normal df
+response_df <- pca_coord[1:length(subtype_pid),]
+normal_df <- pca_coord[-(1:length(subtype_pid)),]
+print(rownames(response_df))
+print(rownames(normal_df))
+
+# # PLOT
+# pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, (var_pc*100)[1:3])
+# color1 <- rep("tomato3", 81)
+# color1[c(10,49)] <- "darkolivegreen3"
+# pch1 <- rep(21:23, c(39,39,3))
+# plotPCA3D(pca_coord[,1:3], color1, pch1, pc_labels)
+
+# Collate MRD results as well
+results_df <- calcERM(response_df, normal_df, yeoh_label)
+results_df
+write.table(results_df, sprintf("dump/features-%s.tsv", SUBTYPE),
+            sep = "\t", quote = F)
+
+par(mar=c(8,3,2,3))
+# Standardise each feature
+calibrated_features <- cbind(
+  results_df[,1:8],
+  results_df[,9]/60, # angle
+  results_df[,10:11],
+  -log10(results_df[,12])/2
+)
+
+# Plotting parameters
+line_color <- ifelse(results_df[,13] == 1, "tomato3", "darkolivegreen3")
+feature_names <- c(colnames(results_df)[1:11], "-log10(mrd)")
+
+# Plot parallel coordinates
+plot(0, xlim = c(1,12), ylim = c(-2,4),
+     type = "n", xaxt = "n", ann = F)
+axis(1, at = 1:12, feature_names, cex = 0.5)
+for (r in 1:nrow(calibrated_features)) {
+  lines(1:12, calibrated_features[r,], col = line_color[r])
+}
+
+subtype_parallel <- recordPlot()
+save_fig(subtype_parallel, sprintf("dump/parallel-%s.pdf", SUBTYPE),
+         width = 10, height = 7)

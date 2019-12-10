@@ -5,8 +5,9 @@ library(scran)
 library(sva)
 library(Harman)
 source("../functions.R")
-source("class_batch_correction.R")
+source("bcm.R")
 theme_set(theme_cowplot())
+
 # Assumes that dataframe has been log-transformed
 plot_batch <- function(df, batch_info, shape_info) {
   batch_factor <- factor(batch_info)
@@ -55,32 +56,18 @@ plot_batch <- function(df, batch_info, shape_info) {
   return(multiplot)
 }
 
-# Returns: ggplot2 of PCA plot
-plot_pca <- function(df, batch_info) {
-  # Principal component analysis
-  # Removes columns with all zeroes
-  col_logical <- apply(t(df), 2, var) != 0
-  pca_df <- t(df)[, col_logical]
-  pca_obj <- prcomp(pca_df, center = T, scale. = T)
-  top_pc <- as.data.frame(pca_obj$x[,1:2])
-  pc1_pc2 <- ggplot(top_pc, aes(x = PC1, y = PC2, col = factor(batch_info))) +
-    geom_point(size = 2, show.legend = F) +
-    geom_label(label = rownames(pca_obj$x),
-               nudge_x = 1, nudge_y = 2, size = 4,
-               show.legend = F)
-  return(pc1_pc2)
-}
 # IMPORT DATA -------------------------------------------------------------
 raw_maqc <- read.table("../diff_expr/data/MAQC-I/processed/mas5_original-ref.tsv",
                        sep = "\t", header = T, row.names = 1)
 
 # MAQC metadata
-batch_info <- rep(1:6, each = 10)
-class_info <- rep(rep(1:2, each = 5), 6)
+batch_info <- as.factor(rep(1:6, each = 10))
+class_info <- rep(rep(LETTERS[1:2], each = 5), 6)
+metadata_df <- data.frame(batch_info, class_info)
+rownames(metadata_df) <- colnames(raw_maqc)
 
-scaled_maqc <- norm.mean_scaling(raw_maqc)
-selected_probesets <- filter_probesets(scaled_maqc, 0.3, class_info)
-filtered_maqc <- scaled_maqc[selected_probesets,]
+scaled_maqc <- normaliseMeanScaling(raw_maqc)
+filtered_maqc <- filterProbesets(scaled_maqc, 0.3, metadata_df)
 log_maqc <- log2_transform(filtered_maqc)
 
 # COMPARISON (EQUAL) ---------------------------------------------------------------
@@ -102,52 +89,6 @@ plot_foo
 ggsave("dump/all_legend.pdf", plot_foo,
        width = 8, height = 8)
 
-plot_batch <- function(df, batch_info, shape_info) {
-  batch_factor <- factor(batch_info)
-  shape_factor <- factor(shape_info)
-  # Principal component analysis
-  # col_logical <- apply(t(df), 2, sum) != 0 & apply(t(df), 2, var) != 0
-  # transpose_df <- t(df)[, col_logical]
-  pca_obj <- prcomp(t(df), center = T, scale. = F)
-  pca_arr <- pca_obj$x
-  # Eigenvalues
-  pca_df <- data.frame(pca_arr)
-  eig_value <- (pca_obj$sdev)^2
-  # Percentage variance of each PC
-  var_pct <- eig_value/sum(eig_value)
-  pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pct[1:5]*100)
-  
-  # PCA scatter plot
-  top_pc <- as.data.frame(pca_obj$x[,1:4])
-  pc1_pc2 <- ggplot(top_pc, aes(x = PC1, y = PC2, col = batch_factor, shape = shape_factor)) +
-    geom_point(size = 3, show.legend = F) +
-    # scale_shape_manual(values=c(19,17)) +
-    labs(x = pc_labels[1], y = pc_labels[2])
-  
-  pc3_pc4 <- ggplot(top_pc, aes(x = PC3, y = PC4, col = batch_factor, shape = shape_factor)) +
-    geom_point(size = 3, show.legend = T) +
-    labs(x = pc_labels[3], y = pc_labels[4], shape="Class", colour="Batch")
-  
-  # PLOT MEANS
-  # Melt dataframe
-  melt_df <- melt(df, variable.name = "ID")
-  # Mean probe intensities for each chip
-  mean_tibble <- melt_df %>% group_by(ID) %>%
-    summarise(mean = mean(value))
-  mean_scatter <- ggplot(mean_tibble, aes(x = ID,
-                                          y = mean,
-                                          col = batch_factor,
-                                          shape = shape_factor)) +
-    geom_point(show.legend = F, size = 3) +
-    # labs(title = sprintf("BE: %.2f%% \n CV: %.2f%%",
-    #                      total_batch_pct, total_class_pct)) +
-    theme(axis.text.x = element_text(size = 5, angle = 90, hjust = 1))
-  
-  # Plot all graphs
-  pca <- plot_grid(pc1_pc2, pc3_pc4)
-  multiplot <- plot_grid(mean_scatter, pca, nrow = 2)
-  return(pca)
-}
 # ggsave("dump/plot_before.pdf", plot_before,
 #        width = 6, height = 6)
 # 
@@ -653,6 +594,40 @@ scaled_maqc <- norm.mean_scaling(raw_maqc)
 plot_scaled <- plot_batch(scaled_maqc, batch_info, shape_info)
 plot_scaled
 
+# 20191209 ----------------------------------------------------------------
+subset_maqc <- log_maqc[,1:20]
+plotPCA2D(subset_maqc, metadata_df)
+
+pca_obj <- prcomp(t(subset_maqc))
+# Identify batch effects features using loadings of PC2
+batch_probesets <- names(
+  head(sort(abs(pca_obj$rotation[,2]), decreasing = T), 20000)
+)
+
+# Remove batch effects features
+corrected_maqc <- subset_maqc[!(rownames(subset_maqc) %in% batch_probesets),]
+dim(corrected_maqc)
+par(mfrow=c(4,2))
+par(mar=c(1,1,1,1))
+idx <- 15000
+for(i in idx:(idx+7)) {
+  y <- as.numeric(subset_maqc[batch_probesets[i],])
+  print(y)
+  plot(1:20, y, pch = rep(rep(21:22, each = 5), 2),
+       cex = 2, bg = rep(2:3, each = 10), ann = FALSE)
+}
+
+missed_probesets <- recordPlot()
+save_fig(missed_probesets, "dump/missed_probesets.pdf",
+         width = 8, height = 10)
+
+plotPCA2D(corrected_maqc, metadata_df)
+
+bcm_maqc <- correctSVDBCM(subset_maqc, metadata_df, 1)
+before_correction <- bcm_maqc$plot[[1]]
+after_correction <- bcm_maqc$corrected_plot[[1]]                                                                                                                                                                                                                                                                                         
+after_rePCA <- plotPCA2D(bcm_maqc$data, metadata_df)
+ggsave("dump/maqc-after_bcmsvd_pca.pdf", after_rePCA)
 
 # Local Batch Effects? ----------------------------------------------------
 # Correct batch 5 and 6
@@ -696,8 +671,6 @@ corrected_6_B[corrected_6_B < 0] <- 0
 corrected_maqc <- cbind(scaled_maqc[,1:50], corrected_6_A, corrected_6_B)
 
 plot_batch(corrected_maqc, batch_info, shape_info)
-
-
 
 # Scanorama ---------------------------------------------------------------
 library(reticulate)

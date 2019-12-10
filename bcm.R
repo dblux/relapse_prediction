@@ -1,7 +1,7 @@
 # Arguments: combined df, batch, class and order info
 # Order info: Left most is anchor data (Recursively corrected)
 # Returns: Combined df of corrected data
-correctPairwiseBCM <- function(df, batch_info, class_info, order_batch,
+correctBCM <- function(df, batch_info, class_info, order_batch,
                        correction_wpath = "dump/correction_vectors.tsv") {
   # Arguments: df1 is anchor batch, df2 is second batch
   # Returns: Combined df of df2 mapped to df1
@@ -254,9 +254,11 @@ correctRefBCM <- function(df1, metadata_df, ref_batch = 1,
 }
 
 # Global BCM (Using D0 correction vector)
-correctGlobalBCM <- function(df1, batch_df) {
-  df1_batch <- batch_df[colnames(df1), "batch"]
+# Batch 2 hard coded to be ref batch
+correctGlobalBCM <- function(df1, metadata_df) {
+  df1_batch <- metadata_df[colnames(df1), "batch_info"]
   # TODO: Error if df1 is array instead of df
+  stopifnot(class(df1) == "data.frame")
   # Split df by batches into list
   list_batch_df <- split.default(df1, df1_batch)
   # Subset only D0 patients in each batch
@@ -284,28 +286,9 @@ correctGlobalBCM <- function(df1, batch_df) {
 # All columns of the metadata have to be factors
 # Have to have column names "batch" and "class"
 ### PAIRWISE PCA ###
+
 correctSVDBCM <- function(df1, metadata_df, ref_batch) {
-  # Free variables: batch_pairwise, class_pch, pc_labels, plot_title
-  # mean_gradient, ref_coef, other_coef, batch_vec_pca
-  plotPairPCA <- function(df1) {
-    ggplot(df1, aes(x = PC1, y = PC2, fill = batch_pairwise)) +
-      geom_point(size = 3, shape = class_pch, show.legend = F) + 
-      geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
-      geom_hline(yintercept = 0, color = "black", alpha = 0.5) +
-      geom_abline(slope = ref_coef[2], intercept = ref_coef[1],
-                  color = "blue", alpha = 0.5) +
-      geom_abline(slope = other_coef[2], intercept = other_coef[1],
-                  color = "blue", alpha = 0.5) +
-      geom_abline(slope = mean_gradient,
-                  color = "orange", alpha = 0.5) +
-      geom_abline(slope = batch_vec_pca[2]/batch_vec_pca[1],
-                  color = "orange", alpha = 0.5) +
-      labs(x = pc_labels[1], y = pc_labels[2], title = plot_title) +
-      theme(plot.title = element_text(hjust = 0.5)) +
-      coord_fixed(ratio = 1)  
-  }
-  
-  all_batch_info <- metadata_df[colnames(df1), "batch"]
+  all_batch_info <- metadata_df[colnames(df1), "batch_info"]
   # Split df by batches into list
   list_batch_df <- split.default(df1, all_batch_info)
   # Initialise empty lists
@@ -346,14 +329,30 @@ correctSVDBCM <- function(df1, metadata_df, ref_batch) {
     var_pct <- eigenvalues[1:5]/sum(eigenvalues)
     pc_labels <- sprintf("PC%d (%.2f%%)", 1:5, var_pct*100)
     
-    batch_pairwise <- metadata_df[colnames(pair_batch), "batch"]
+    batch_pairwise <- metadata_df[colnames(pair_batch), "batch_info"]
     
-    class_pairwise <- metadata_df[colnames(pair_batch), "class"]
+    class_pairwise <- metadata_df[colnames(pair_batch), "class_info"]
     all_pch <- 21:25
     class_pch <- all_pch[class_pairwise]
     
     # Plot BEFORE CORRECTION
-    list_plot[[j]] <- plotPairPCA(data.frame(rbind(ref_pca, other_pca)))
+    list_plot[[j]] <- ggplot(data.frame(rbind(ref_pca, other_pca)),
+                             aes(x = PC1, y = PC2)) +
+      geom_point(aes(fill = batch_pairwise), pch = class_pch,
+                 size = 3, show.legend = F) + 
+      geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
+      geom_hline(yintercept = 0, color = "black", alpha = 0.5) +
+      geom_abline(slope = ref_coef[2], intercept = ref_coef[1],
+                  color = "blue", alpha = 0.5) +
+      geom_abline(slope = other_coef[2], intercept = other_coef[1],
+                  color = "blue", alpha = 0.5) +
+      geom_abline(slope = mean_gradient,
+                  color = "orange", alpha = 0.5) +
+      geom_abline(slope = batch_vec_pca[2]/batch_vec_pca[1],
+                  color = "orange", alpha = 0.5) +
+      labs(x = pc_labels[1], y = pc_labels[2], title = plot_title) +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      coord_fixed(ratio = 1)
     
     # BCM: In PC1 & PC2 subspace
     other_ref_vec <- colMeans(ref_pca[,1:2]) - colMeans(other_pca[,1:2])
@@ -365,10 +364,27 @@ correctSVDBCM <- function(df1, metadata_df, ref_batch) {
                                       pair_prcomp$center, "+"))
     
     # Plot single pairwise
-    list_corrected_plot[[j]] <- plotPairPCA(data.frame(rbind(ref_pca,
-                                                             other_pca)))
+    list_corrected_plot[[j]] <- ggplot(data.frame(rbind(ref_pca, other_pca)),
+                                       aes(x = PC1, y = PC2)) +
+      geom_point(aes(fill = batch_pairwise), pch = class_pch,
+                 size = 3, show.legend = F) + 
+      geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
+      geom_hline(yintercept = 0, color = "black", alpha = 0.5) +
+      geom_abline(slope = ref_coef[2], intercept = ref_coef[1],
+                  color = "blue", alpha = 0.5) +
+      geom_abline(slope = other_coef[2], intercept = other_coef[1],
+                  color = "blue", alpha = 0.5) +
+      geom_abline(slope = mean_gradient,
+                  color = "orange", alpha = 0.5) +
+      geom_abline(slope = batch_vec_pca[2]/batch_vec_pca[1],
+                  color = "orange", alpha = 0.5) +
+      labs(x = pc_labels[1], y = pc_labels[2], title = plot_title) +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      coord_fixed(ratio = 1)
+    
     j <- j + 1
   }
+  
   # Combine reference and corrected non-references
   # Reorder columns according to initial df
   corrected_nonref_df <- do.call(cbind, list_corrected_df)

@@ -17,7 +17,7 @@ normaliseMinmax <- function(vec) {(vec-min(vec))/(max(vec)-min(vec))}
 normaliseMeanScaling <- function(df, target_mean = 500, trim = 0.02) {
   trimmed_mean <- apply(df, 2, mean, trim = trim)
   scaling_factor <- target_mean/trimmed_mean
-  print(scaling_factor)
+  print(head(scaling_factor))
   scaled_df <- as.data.frame(mapply(function(a,b) a*b, df, scaling_factor))
   rownames(scaled_df) <- rownames(df)
   return(scaled_df)
@@ -119,7 +119,7 @@ normaliseCDF <- function(df) {
 #' @param metadata_df df containing class labels of samples
 #' @param logical_func a function that is either "all" or "any". (Either all or
 #' just one class have to pass the threshold)
-#' @return vector containing rownames of rows that meet threshold of non-zero
+#' @return dataframe containing rows that meet threshold of non-zero
 #' values
 filterProbesets <- function(df1, percent_threshold, metadata_df = NULL,
                             logical_func = any) {
@@ -130,7 +130,8 @@ filterProbesets <- function(df1, percent_threshold, metadata_df = NULL,
                 nrow(df1) - sum(selected_logvec)))
     return(df1[selected_logvec,])
   } else {
-    class_factor <- metadata_df[colnames(df1),"class"]
+    class_factor <- metadata_df[colnames(df1),"class_info"]
+    print(head(class_factor))
     logical_df <- data.frame(df1 != 0)
     list_logical_df <- split.default(logical_df, class_factor)
     list_logvec <- lapply(
@@ -440,13 +441,13 @@ kegg_df <- function(kegg_fpath) {
 # Assumes that dataframe has been log-transformed
 plotExplore <- function(df1, metadata_df) {
   # Obtaining batch and class annotations
-  batch_factor <- as.factor(metadata_df[colnames(df1),"batch"])
-  class_factor <- metadata_df[colnames(df1),"class"]
+  batch_factor <- as.factor(metadata_df[colnames(df1),"batch_info"])
+  class_factor <- metadata_df[colnames(df1),"class_info"]
   
   # Melt dataframe
   melt_df <- melt(df1, measure.vars = colnames(df1), variable.name = "ID")
-  melt_df$batch <- as.factor(metadata_df[melt_df$ID,"batch"])
-  melt_df$class <- metadata_df[melt_df$ID,"class"]
+  melt_df$batch <- as.factor(metadata_df[melt_df$ID,"batch_info"])
+  melt_df$class <- metadata_df[melt_df$ID,"class_info"]
   
   # Plot means
   mean_tibble <- melt_df %>% group_by(ID) %>% summarise(mean = mean(value))
@@ -464,9 +465,9 @@ plotExplore <- function(df1, metadata_df) {
   # Plot density curve
   print(head(melt_df))
   print(tail(melt_df))
-  pdf <- ggplot(melt_df, aes(x = value, group = ID, col = batch)) +
+  pdf <- ggplot(melt_df, aes(x = value, group = ID, col = batch_info)) +
     geom_density(show.legend = F, alpha = 0.3) +
-    facet_wrap(~class) +
+    facet_wrap(~class_info) +
     scale_color_viridis_d()
   
   # Plot PCA
@@ -510,6 +511,45 @@ plot_pca <- function(df, batch_info) {
   return(pc1_pc2)
 }
 
+plotPCA2D <- function(df1, metadata_df, pc_labels = NULL) {
+  # Obtaining batch and class annotations
+  batch_factor <- as.factor(metadata_df[colnames(df1),"batch_info"])
+  class_factor <- metadata_df[colnames(df1),"class_info"]
+  print(batch_factor)
+  print(class_factor)
+  
+  # PCA
+  if (is.null(pc_labels)) {
+    pca_obj <- prcomp(t(df1))
+    pca_df <- data.frame(pca_obj$x[,1:4])
+    eigenvalues <- (pca_obj$sdev)^2
+    var_pc <- eigenvalues[1:4]/sum(eigenvalues)
+    pc_labels <- sprintf("PC%d (%.2f%%)", 1:4, var_pc*100)
+  } else {
+    print("No PCA performed!")
+    pca_df <- data.frame(df1)
+  }
+  
+  pc1_pc2 <- ggplot(pca_df, aes(x = PC1, y = PC2, col = batch_factor,
+                                pch = class_factor)) +
+    geom_point(size = 3, show.legend = F) +
+    labs(x = pc_labels[1], y = pc_labels[2]) +
+    geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
+    geom_hline(yintercept = 0, color = "black", alpha = 0.5)
+  # theme(plot.title = element_text(hjust = 0.5))
+  
+  #   pc1_pc3 <- ggplot(pca_df, aes(x = PC1, y = PC3, col = batch_factor,
+  #                                 pch = class_factor)) +
+  #     geom_point(size = 3, show.legend = F) +
+  #     labs(x = pc_labels[1], y = pc_labels[3]) +
+  #     geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
+  #     geom_hline(yintercept = 0, color = "black", alpha = 0.5)
+  
+  #   pca_plot <- plot_grid(pc1_pc2, pc1_pc3)
+  
+  return(pc1_pc2)
+}
+
 # 3D PCA plot
 plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
                       ratio_list = list(2,1,1)) {
@@ -545,11 +585,11 @@ plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
 # Plot batches in different colours and classes in different shapes
 plotPCA3DBatchEffects <- function(df1, metadata_df) {
   # Batch and class annotations
-  batch_factor <- metadata_df[colnames(df1), "batch"]
+  batch_factor <- metadata_df[colnames(df1), "batch_info"]
   batch_palette <- generateGgplotColours(length(unique(batch_factor)))
   batch_colour <- batch_palette[batch_factor]
   
-  class_factor <- metadata_df[colnames(df1), "class"]
+  class_factor <- metadata_df[colnames(df1), "class_info"]
   all_pch <- 21:25
   # Error if there are more classes than pch symbols (> 5)
   stopifnot(length(unique(class_factor)) <= 5)
@@ -621,8 +661,8 @@ eval_batch_effects <- function(df, batch_info, class_info) {
     # SS_between/(SS_between + SS_within)
     calc_var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
     pc_metadata <- data.frame(pc = vec,
-                              batch = as.factor(batch_info),
-                              class = as.factor(class_info))
+                              batch_info = as.factor(batch_info),
+                              class_info = as.factor(class_info))
     batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
     class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
     return(c(calc_var_percentage(batch_anova_attr),
