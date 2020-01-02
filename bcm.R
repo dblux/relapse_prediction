@@ -117,8 +117,8 @@ correctBCM <- function(df, batch_info, class_info, order_batch,
 correctRefBCM <- function(df1, metadata_df, ref_batch = 1,
                           correction_wpath = "dump/correction_vectors.tsv") {
   # Obtaining batch and class annotations
-  batch_factor <- as.factor(metadata_df[colnames(df1),"batch"])
-  class_factor <- metadata_df[colnames(df1),"class"]
+  batch_factor <- as.factor(metadata_df[colnames(df1),"batch_info"])
+  class_factor <- metadata_df[colnames(df1),"class_info"]
   batch_levels <- levels(batch_factor)
   
   # Split df by batches into list
@@ -134,11 +134,13 @@ correctRefBCM <- function(df1, metadata_df, ref_batch = 1,
     if (length(list_df) == 0) return(ref_df)
     else {
       # BATCH EFFECT CORRECTION
-      ref_class_info <- as.character(metadata_df[colnames(ref_df), "class"])
+      ref_class_info <- as.character(metadata_df[colnames(ref_df),
+                                                 "class_info"])
       ref_levels <- unique(ref_class_info)
       
       list_other_classes <- lapply(
-        list_df, function(nonref_df) metadata_df[colnames(nonref_df), "class"]
+        list_df, function(nonref_df) metadata_df[colnames(nonref_df),
+                                                 "class_info"]
       )
       
       # Logical vector selecting batches that have at least one intersecting
@@ -164,7 +166,7 @@ correctRefBCM <- function(df1, metadata_df, ref_batch = 1,
       # Global: Variables belonging to ref_batch
       single_correction <- function(other_df) {
         other_class_info <- as.character(metadata_df[colnames(other_df),
-                                                     "class"])
+                                                     "class_info"])
         print("other_class_info"); print(other_class_info)
         other_levels <- unique(other_class_info)
         # Find classes that appear in both batches (Impt to sort!!!)
@@ -206,7 +208,7 @@ correctRefBCM <- function(df1, metadata_df, ref_batch = 1,
             centroid_vec <- list_other_centroids[[class]]
             # Calculate euclidean distance of current centroid to intersection centroids
             distance_vec <- sapply(list_other_centroids[intersect_classes],
-                                   function(vec) calc.l2_norm(vec-centroid_vec))
+                                   function(vec) calcL2Norm(vec-centroid_vec))
             nearest_class <- names(sort(distance_vec))[1]
             # Use correction vector of nearest class
             correction_df <- correction_vectors[,nearest_class, drop = F]

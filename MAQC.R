@@ -1,9 +1,9 @@
 library(reshape2)
 library(ggplot2)
 library(cowplot)
-library(scran)
-library(sva)
-library(Harman)
+# library(scran)
+# library(sva)
+# library(Harman)
 source("../functions.R")
 source("bcm.R")
 theme_set(theme_cowplot())
@@ -596,30 +596,75 @@ plot_scaled
 
 # 20191209 ----------------------------------------------------------------
 subset_maqc <- log_maqc[,1:20]
+
+bcm_maqc <- correctRefBCM(log_maqc, metadata_df, 1)
 plotPCA2D(subset_maqc, metadata_df)
 
 pca_obj <- prcomp(t(subset_maqc))
 # Identify batch effects features using loadings of PC2
-batch_probesets <- names(
-  head(sort(abs(pca_obj$rotation[,2]), decreasing = T), 20000)
-)
+batch_probesets <- names(sort(abs(pca_obj$rotation[,2]), decreasing = T))
 
-# Remove batch effects features
-corrected_maqc <- subset_maqc[!(rownames(subset_maqc) %in% batch_probesets),]
-dim(corrected_maqc)
+# # Remove batch effects features
+# corrected_maqc <- subset_maqc[!(rownames(subset_maqc) %in% batch_probesets),]
+# dim(corrected_maqc)
+
 par(mfrow=c(4,2))
-par(mar=c(1,1,1,1))
-idx <- 15000
-for(i in idx:(idx+7)) {
-  y <- as.numeric(subset_maqc[batch_probesets[i],])
-  print(y)
-  plot(1:20, y, pch = rep(rep(21:22, each = 5), 2),
-       cex = 2, bg = rep(2:3, each = 10), ann = FALSE)
+par(mar=rep(2,4))
+idx <- 4000*4+1
+for(i in idx:(idx+3)) {
+  y <- as.numeric(log_maqc[batch_probesets[i],])
+  bcm_y <- as.numeric(bcm_maqc[batch_probesets[i],])
+  print(batch_probesets[i])
+  plot(1:60, y, pch = rep(rep(21:22, each = 5), 6), main = batch_probesets[i],
+       cex = 2, bg = rep(2:7, each = 10))
+  plot(1:60, bcm_y, pch = rep(rep(21:22, each = 5), 6),
+       main = batch_probesets[i], cex = 2, bg = rep(2:7, each = 10))
 }
 
-missed_probesets <- recordPlot()
-save_fig(missed_probesets, "dump/missed_probesets.pdf",
+interesting_probesets <- recordPlot()
+save_fig(interesting_probesets, "dump/interesting_probesets1.pdf",
          width = 8, height = 10)
+
+# Fitting a linear model
+y <- as.numeric(log_maqc["206766_at",])
+batch_info <- as.factor(rep(1:6, each = 10))
+class_info <- as.factor(rep(rep(LETTERS[1:2], each = 5), 6))
+fitted_model <- lm(y ~ batch_info + class_info)
+summary(fitted_model)
+
+class_info
+mean(y[1:5])
+
+par(mfrow=c(1,1))
+plot(1:60, y, col = batch_info)
+
+
+# SELECT BATCH GENES ------------------------------------------------------
+idx <- 1810*8
+interesting_probesets <- log_maqc[batch_probesets[idx], ,
+                                  drop = FALSE]
+groups <- mapply(paste0, class_info, batch_info)
+
+list_class <- split.default(interesting_probesets, groups)
+list_classA <- list_class[grepl("A", names(list_class))]
+` `
+lapply(list_classA, median)
+
+# for (i in 1:8) {
+#   hist(log_maqc[,i], breaks = 50)
+#   print(i)
+# }
+
+sampled_probesets <- subset_maqc[batch_probesets[idx:(idx+7)],]
+write.table(sampled_probesets, "dump/sample_maqc_data.tsv",
+            quote = F, sep = "\t")
+
+probeset <- rownames(sample_maqc)[1]
+plot(1:60, log_maqc[probeset,])
+# Local batch effects (some classes are different)
+
+
+# Investigate heavily loaded probesets
 
 plotPCA2D(corrected_maqc, metadata_df)
 
@@ -628,6 +673,18 @@ before_correction <- bcm_maqc$plot[[1]]
 after_correction <- bcm_maqc$corrected_plot[[1]]                                                                                                                                                                                                                                                                                         
 after_rePCA <- plotPCA2D(bcm_maqc$data, metadata_df)
 ggsave("dump/maqc-after_bcmsvd_pca.pdf", after_rePCA)
+
+# Investigate correction vectors
+correction_vectors <- read.table("history/correction_log_maqc.tsv",
+                                 sep = "\t", header = T, row.names = 1)
+hist(correction_vectors[,2], breaks = 100)
+
+# INDIVIDUAL BATCH EFFECT GENES -------------------------------------------
+# Between batch 1 and 2
+b1n2 <- log_maqc[,1:20]
+pca_obj <- prcomp(t(b1n2))
+batch_probesets <- names(sort(pca_obj$rotation[,2], decreasing = TRUE))
+b1n2[,batch_probesets[i]]
 
 # Local Batch Effects? ----------------------------------------------------
 # Correct batch 5 and 6
@@ -671,23 +728,6 @@ corrected_6_B[corrected_6_B < 0] <- 0
 corrected_maqc <- cbind(scaled_maqc[,1:50], corrected_6_A, corrected_6_B)
 
 plot_batch(corrected_maqc, batch_info, shape_info)
-
-# Scanorama ---------------------------------------------------------------
-library(reticulate)
-scanorama <- import('scanorama')
-# # Scanorama requires matrices of samples x genes
-# # Transposing converts df into matrix
-# # Call split.data.frame explicity to work with matrices
-# # List of batch matrices
-# list_batch_mat <- split.data.frame(t(log_maqc), as.factor(batch_info))
-# num_batches <- 6
-# genes_list <- rep(list(rownames(log_maqc)), num_batches)
-# 
-# integrated_data <- scanorama$integrate(list_batch_mat, genes_list)
-# corrected.data <- scanorama$correct(datasets, genes_list, return_dense=TRUE)
-# integrated.corrected.data <- scanorama$correct(datasets, genes_list,
-#                                                return_dimred=TRUE, return_dense=TRUE)
-
 
 # MODELLING ---------------------------------------------------------------
 # Distributions of values across batches are very different
@@ -988,3 +1028,19 @@ vec_groupmeans <- do.call(c, list_groupmeans)
 ss_between <- sum((vec_groupmeans - mean(vector))^2)*10
 within_var <- mapply(function(vec, mean) sum((vec-mean)^2), list_batches, list_groupmeans)
 ss_within <- sum(within_var)
+
+# BCM - SVD ---------------------------------------------------------------
+subset_maqc <- log_maqc[,1:20]
+bcm_maqc <- correctSVDBCM(subset_maqc, metadata_df, 1)
+before_correction <- bcm_maqc$plot[[1]]
+after_correction <- bcm_maqc$corrected_plot[[1]]                                                                                                                                                                                                                                                                                         
+after_rePCA <- plotPCA2D(bcm_maqc$data, metadata_df)
+after_correction
+
+ggsave("dump/maqc-after_bcmsvd_pca.pdf", after_rePCA)
+
+# Investigate correction vectors
+correction_vectors <- read.table("history/correction_log_maqc.tsv",
+                                 sep = "\t", header = T, row.names = 1)
+hist(correction_vectors[,2], breaks = 100)
+

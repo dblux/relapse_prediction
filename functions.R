@@ -753,7 +753,8 @@ calcL2Norm <- function(vec) sqrt(sum(vec^2))
 #' Calculates cosine similarity between two vectors
 #' @return Scalar cos(theta)
 calcCosineSim <- function(vec1, vec2) {
-  sum(vec1*vec2)/(calcL2Norm(vec1)*calcL2Norm(vec2))
+  stopifnot(length(vec1) == length(vec2))
+  return(sum(vec1*vec2)/(calcL2Norm(vec1)*calcL2Norm(vec2)))
 }
 
 #' Converts radians to degrees

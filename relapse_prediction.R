@@ -46,7 +46,7 @@ plot_mean <- function(df, batch_vec1) {
 selectFeatures <- function(df1, metadata_df,
                            alpha = 0.05, logfc_threshold = 1) {
   # Subset df according to D0 and D8
-  class_info <- metadata_df[colnames(df1), "class"]
+  class_info <- metadata_df[colnames(df1), "class_info"]
   df_d0 <- df1[,class_info == "D0"]
   df_d8 <- df1[,class_info == "D8"]
   print(head(colnames(df_d0)))
@@ -115,10 +115,6 @@ calcERM <- function(response_df, normal_df, labels_df) {
   erm3 <- d8_df[,1] - d0_df[,1]
   # Divide by D0-Normal along PC1
   erm3_ratio <- erm3/(median(normal_df[,1]) - d0_df[,1])
-  print(class(erm3))
-  print(class(median(normal_df[,1]) - d0_df[,1]))
-  print(head(erm3))
-  print(head(median(normal_df[,1]) - d0_df[,1]))
   
   stopifnot(identical(names(erm3), names(erm3_ratio)))
   
@@ -128,19 +124,37 @@ calcERM <- function(response_df, normal_df, labels_df) {
   l2norm_d8 <- apply(d8_df, 1, calcL2Norm)
   diff_l2norm <- l2norm_d8 - l2norm_d0
   
-  # Angle between D0 and D8
+  ### Angle between D0 and D8 ###
   angle_d0_d8 <- mapply(calcAngleVectors,
                         data.frame(t(d0_df)), data.frame(t(d8_df)))
   
+  ### Angle between D0-D8 and Leuk-Normal ###
+  angle_d0d8_normal <- apply(
+    d0_d8_hstack, 1, function(row_vec) calcAngleVectors(row_vec, leuk_normal)
+  )
+  
+  ### Angle between D0 and normal ###
+  angle_d0_normal <- apply(
+    d0_df, 1, function(row_vec) calcAngleVectors(row_vec, normal_centroid)
+  )
+  
+  ### Angle between D8 and Normal ###
+  angle_d8_normal <- apply(
+    d8_df, 1, function(row_vec) calcAngleVectors(row_vec, normal_centroid)
+  )
+  
   ### Concatenate all features ###
   features_df <- cbind(erm1, erm1_ratio, erm2, erm2_ratio, erm3, erm3_ratio,
+                       d0_normal_proj, d8_normal_proj,
                        l2norm_d0_d8, diff_l2norm, angle_d0_d8,
-                       d0_normal_proj, d8_normal_proj)
+                       angle_d0d8_normal, angle_d0_normal, angle_d8_normal)
   row_idxstr <- substring(rownames(features_df),1,4)
-  # Concatenate features with labels
+  
   ### RESULTS DF ###
+  # Concatenate features with labels
   results_df <- cbind(features_df, labels_df[row_idxstr, c(1,5)])
   rownames(results_df) <- row_idxstr
+  
   return(results_df)
 }
 
@@ -259,7 +273,7 @@ class_info <- rep(c("D0","D8","N"), c(208,208,45))
 class_numeric <- rep(1:3, c(208,208,45))
 metadata_df <- data.frame(batch_info, class_info)
 rownames(metadata_df) <- colnames(yeoh_combined)
-head(metadata_df)
+
 # Add subtype info to metadata
 subtype <- yeoh_label[substr(colnames(yeoh_combined), 1, 4), "subtype"]
 label <- as.factor(yeoh_label[substr(colnames(yeoh_combined), 1, 4),
@@ -289,27 +303,24 @@ not_batch5 <- metadata_df[colnames(processed_yeoh), "batch_info"] != 5
 subset_yeoh <- processed_yeoh[, not_batch5 & not_diffbatch]
 
 # QUANTILE ---------------------------------------------------------
-### QUANTILE (ALL)
-quantile_yeoh <- normaliseQuantile(subset_yeoh)
+# ### QUANTILE (ALL)
+# quantile_yeoh <- normaliseQuantile(subset_yeoh)
+colnames(subset_yeoh[403:405])
+### QUANTILE (TIMEPOINT)
+quantile_d0 <- normaliseQuantile(subset_yeoh[, 1:201])
+quantile_d8 <- normaliseQuantile(subset_yeoh[, 202:402])
+quantile_normal <- normaliseQuantile(subset_yeoh[, 403:405])
+quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_normal)
 
-# ### QUANTILE (TIMEPOINT)
-# quantile_d0 <- norm_quantile(log_yeoh[, 1:208])
-# quantile_d8 <- norm_quantile(log_yeoh[, 209:416])
-# quantile_normal <- norm_quantile(log_yeoh[, 417:461])
-# quantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_normal)
-
-calc.var_preservation(log_yeoh, quantile_yeoh)
-metrics <- eval.batch_effects(quantile_yeoh, batch_info, class_numeric)
-
-plotPCA3DYeoh(quantile_yeoh, metadata_df)
-rgl.postscript("dump/pca_3d-cs_quantile.pdf", "pdf")
+# # Evaluation
+# calc.var_preservation(log_yeoh, quantile_yeoh)
+# metrics <- eval.batch_effects(quantile_yeoh, batch_info, class_numeric)
+# plotPCA3DYeoh(quantile_yeoh, metadata_df)
+# rgl.postscript("dump/pca_3d-cs_quantile.pdf", "pdf")
 
 intersect_probesets <- selectFeatures(quantile_yeoh, metadata_df)
 selected_quantile <- quantile_yeoh[intersect_probesets,]
 results_df <- calcERM_PCA(selected_quantile, metadata_df)
-
-calc.var_composition(quantile_yeoh, batch_info, class_info)
-calc.var_preservation(log_yeoh, quantile_yeoh)
 
 # Quantile (Class) - ComBat -----------------------------------------------
 colnames(log_yeoh)
@@ -1497,23 +1508,25 @@ entrez_yeoh <- affy2id(removeProbesets(subset_yeoh), ANNOT_PROBESET_RPATH)
 gfs_yeoh <- normaliseGFS(entrez_yeoh, num_intervals = 4)
 qpsp_yeoh <- calcQPSP(gfs_yeoh, subnetwork_nea)
 
+dim(qpsp_yeoh)
+dim(subset_yeoh)
 # # Plot PCA before selecting features
 # plotPCA3DYeoh(qpsp_yeoh, metadata_df)
 # rgl.postscript("dump/pca_3d-qpsp_nea.pdf", "pdf")
 
 # No need for feature selection as features have been reduced
-SUBTYPE <- levels(full_metadata_df$subtype)[6]
+SUBTYPE <- levels(full_metadata_df$subtype)[9]
 SUBTYPE
 normal_pid <- paste0("N0", c(1,2,4))
 
 subtype_pid <- rownames(subset(full_metadata_df,
-                               subtype == SUBTYPE & class != "N" & 
+                               subtype == SUBTYPE & class_info != "N" & 
                                  rownames(full_metadata_df) %in% 
                                  colnames(qpsp_yeoh)))
 subset_pid <- c(subtype_pid, normal_pid)
 
 subtype_metadata <- full_metadata_df[subset_pid,]
-subtype_metadata
+
 # Subtype and normal samples
 subtype_qpsp <- qpsp_yeoh[,subset_pid]
 
@@ -1521,22 +1534,26 @@ subtype_qpsp <- qpsp_yeoh[,subset_pid]
 bcm_qpsp <- correctGlobalBCM(subtype_qpsp, metadata_df)
 
 # PCA
-pca_obj <- prcomp(t(bcm_qpsp))
+pca_obj <- prcomp(t(selected_quantile))
 # PCA: Eigenvalues
 eigenvalues <- (pca_obj$sdev)^2
 var_pc <- eigenvalues/sum(eigenvalues)
 # Use till PC15 to account for at least 70% variance
-cumsum(variance_proportion)[1:50]
+cum_var <- cumsum(var_pc)[1:100]
+cum_var
 # Identify PC that has just above 70% variance
-pc_ind <- which.max(cumsum(variance_proportion)[1:50] > 0.70)
+pc_ind <- which.max(cum_var > 0.70)
 pc_ind # PC20
 
 # PCA: Coordinates
 pca_coord <- pca_obj$x[,1:pc_ind]
 # Response df and normal df
-response_df <- pca_coord[1:length(subtype_pid),]
-normal_df <- pca_coord[-(1:length(subtype_pid)),]
+rownames(pca_coord)
+n_idx <- nrow(pca_coord) - 3
+response_df <- pca_coord[1:n_idx,]
+normal_df <- pca_coord[-(1:n_idx),]
 print(rownames(response_df))
+# CHECK
 print(rownames(normal_df))
 
 # # PLOT
@@ -1549,28 +1566,29 @@ print(rownames(normal_df))
 # Collate MRD results as well
 results_df <- calcERM(response_df, normal_df, yeoh_label)
 results_df
+SUBTYPE <- "cs_quantile"
 write.table(results_df, sprintf("dump/features-%s.tsv", SUBTYPE),
             sep = "\t", quote = F)
 
 par(mar=c(8,3,2,3))
 # Standardise each feature
 calibrated_features <- cbind(
-  results_df[,1:8],
-  results_df[,9]/60, # angle
-  results_df[,10:11],
-  -log10(results_df[,12])/2
+  results_df[,1:10],
+  results_df[,11:14]/60, # angle
+  -log10(results_df[,15])/2 # mrd
 )
 
 # Plotting parameters
-line_color <- ifelse(results_df[,13] == 1, "tomato3", "darkolivegreen3")
-feature_names <- c(colnames(results_df)[1:11], "-log10(mrd)")
+line_color <- ifelse(results_df[,16] == 1, "tomato3", "darkolivegreen3")
+feature_names <- c(colnames(results_df)[1:11], "ang_d0d8_normal",
+                   colnames(results_df)[13:14], "-log10(mrd)")
 
 # Plot parallel coordinates
-plot(0, xlim = c(1,12), ylim = c(-2,4),
+plot(0, xlim = c(1,15), ylim = c(-2,3),
      type = "n", xaxt = "n", ann = F)
-axis(1, at = 1:12, feature_names, cex = 0.5)
+axis(1, at = 1:15, feature_names, cex = 0.5)
 for (r in 1:nrow(calibrated_features)) {
-  lines(1:12, calibrated_features[r,], col = line_color[r])
+  lines(1:15, calibrated_features[r,], col = line_color[r])
 }
 
 subtype_parallel <- recordPlot()
