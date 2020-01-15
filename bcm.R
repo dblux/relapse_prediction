@@ -288,8 +288,12 @@ correctGlobalBCM <- function(df1, metadata_df) {
 # All columns of the metadata have to be factors
 # Have to have column names "batch" and "class"
 ### PAIRWISE PCA ###
-
 correctSVDBCM <- function(df1, metadata_df, ref_batch) {
+  # TODO: DELETE
+  df1 <- subset_maqc
+  metadata_df
+  ref_batch <- 1
+  
   all_batch_info <- metadata_df[colnames(df1), "batch_info"]
   # Split df by batches into list
   list_batch_df <- split.default(df1, all_batch_info)
@@ -356,9 +360,37 @@ correctSVDBCM <- function(df1, metadata_df, ref_batch) {
       theme(plot.title = element_text(hjust = 0.5)) +
       coord_fixed(ratio = 1)
     
-    # BCM: In PC1 & PC2 subspace
-    other_ref_vec <- colMeans(ref_pca[,1:2]) - colMeans(other_pca[,1:2])
-    other_pca[,1:2] <- sweep(other_pca[,1:2], 2, other_ref_vec, `+`)
+    # BCM: In PC1 & PC2 & PC3 subspace
+    # other_ref_vec <- colMeans(ref_pca[,1:2]) - colMeans(other_pca[,1:2]) # TODO
+    # TODO: Identify intersecting classes
+    ref_class <- metadata_df[rownames(ref_pca), "class_info"]
+    list_ref_pca <- split.data.frame(ref_pca[,1:3], ref_class)
+    list_ref_centroid <- lapply(list_ref_pca, apply, 2, mean, trim = 0.2)
+    
+    other_class <- metadata_df[rownames(other_pca), "class_info"]
+    list_other_pca <- split.data.frame(other_pca[,1:3], other_class)
+    list_other_centroid <- lapply(list_other_pca, apply, 2, mean, trim = 0.2)
+    
+    # Correction vectors for each intersected class in other batch
+    list_correction_vec <- mapply(`-`, list_ref_centroid, list_other_centroid,
+                                  SIMPLIFY = FALSE)
+    
+    # Adding correction vectors to other batch
+    list_corrected_other <- mapply(sweep,
+                                   x = list_other_pca,
+                                   STATS = list_correction_vec,
+                                   MoreArgs = list(MARGIN = 2, FUN = "+"),
+                                   SIMPLIFY = FALSE)
+    
+    corrected_df <- do.call(rbind, list_corrected_other)[rownames(other_pca),]
+    other_pca[,1:3] <- corrected_df
+    
+    # Edit: Trimmed mean BCM
+    # ref_centroid <- apply(ref_pca[,1:2], 2, mean, trim = 0.2)
+    # other_centroid <- apply(other_pca[,1:2], 2, mean, trim = 0.2)
+    # other_ref_vec <- ref_centroid - other_centroid
+    # other_pca[,1:2] <- sweep(other_pca[,1:2], 2, other_ref_vec, `+`)
+    
     # Transform corrected non-reference batch to original space
     rotated_other <- other_pca %*% t(pair_prcomp$rotation)
     # Return corrected non-reference df

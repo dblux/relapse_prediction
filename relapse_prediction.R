@@ -239,18 +239,18 @@ yeoh_normal <- read.table("data/leuk_normal/processed/mas5_filtered.tsv",
 # Metadata
 yeoh_batch <- read.table("data/GSE67684/processed/metadata_combined-batch.tsv",
                          sep = "\t", header = T, row.names = 1)
-yeoh_label <- read.table("data/GSE67684/processed/metadata_combined-label_subtype_edited.tsv",
+yeoh_label <- read.table("data/GSE67684/processed/metadata-label_mrd_subtype.tsv",
                          sep = "\t", header = T, row.names = 1)
 
-# Edit yeoh_label: MRD33
-# Change all equivalent strings to the same
-levels(yeoh_label$d33_mrd)[1:4] <- levels(yeoh_label$d33_mrd)[1]
-# Assign <10E-04
-levels(yeoh_label$d33_mrd)[1] <- 0.00001
-yeoh_label$d33_mrd <- addNA(yeoh_label$d33_mrd)
-# Assign NA <- 0
-levels(yeoh_label$d33_mrd)[35] <- 0
-yeoh_label$d33_mrd <- as.numeric(as.character(yeoh_label$d33_mrd))
+# # Edit yeoh_label: MRD33
+# # Change all equivalent strings to the same
+# levels(yeoh_label$d33_mrd)[1:4] <- levels(yeoh_label$d33_mrd)[1]
+# # Assign <10E-04
+# levels(yeoh_label$d33_mrd)[1] <- 0.00001
+# yeoh_label$d33_mrd <- addNA(yeoh_label$d33_mrd)
+# # Assign NA <- 0
+# levels(yeoh_label$d33_mrd)[35] <- 0
+# yeoh_label$d33_mrd <- as.numeric(as.character(yeoh_label$d33_mrd))
 
 # Removal of outlier samples and their associated pairs
 # Patients "P198_D8", "P186_D0" are associated pairs
@@ -282,7 +282,7 @@ full_metadata_df <- cbind(metadata_df, subtype, label)
 
 ### SFL ###
 processed_yeoh <- log2_transform(
-  filterProbesets(normaliseMeanScaling(yeoh_combined), 0.3, metadata_df)
+  filterProbesets(normaliseMeanScaling(yeoh_combined), 0.7, metadata_df)
 )
 
 # SUBSET DATA -------------------------------------------------------------
@@ -1501,21 +1501,15 @@ subnetwork_nea <- split(as.character(nea_df$gene_id), nea_df$subnetwork_id)
 ANNOT_PROBESET_RPATH <- "../info/microarray/HG-U133A/annot_entrez-GPL96.tsv"
 entrez_yeoh <- affy2id(removeProbesets(subset_yeoh), ANNOT_PROBESET_RPATH)
 
-# # Perform BCM before QPSP
-# bcm_yeoh <- correctGlobalBCM(entrez_yeoh, metadata_df)
-
 # Calculate QPSP profiles
 gfs_yeoh <- normaliseGFS(entrez_yeoh, num_intervals = 4)
 qpsp_yeoh <- calcQPSP(gfs_yeoh, subnetwork_nea)
 
 dim(qpsp_yeoh)
 dim(subset_yeoh)
-# # Plot PCA before selecting features
-# plotPCA3DYeoh(qpsp_yeoh, metadata_df)
-# rgl.postscript("dump/pca_3d-qpsp_nea.pdf", "pdf")
 
 # No need for feature selection as features have been reduced
-SUBTYPE <- levels(full_metadata_df$subtype)[9]
+SUBTYPE <- levels(full_metadata_df$subtype)[8]
 SUBTYPE
 normal_pid <- paste0("N0", c(1,2,4))
 
@@ -1524,8 +1518,7 @@ subtype_pid <- rownames(subset(full_metadata_df,
                                  rownames(full_metadata_df) %in% 
                                  colnames(qpsp_yeoh)))
 subset_pid <- c(subtype_pid, normal_pid)
-
-subtype_metadata <- full_metadata_df[subset_pid,]
+# subtype_metadata <- full_metadata_df[subset_pid,]
 
 # Subtype and normal samples
 subtype_qpsp <- qpsp_yeoh[,subset_pid]
@@ -1534,7 +1527,7 @@ subtype_qpsp <- qpsp_yeoh[,subset_pid]
 bcm_qpsp <- correctGlobalBCM(subtype_qpsp, metadata_df)
 
 # PCA
-pca_obj <- prcomp(t(selected_quantile))
+pca_obj <- prcomp(t(bcm_qpsp))
 # PCA: Eigenvalues
 eigenvalues <- (pca_obj$sdev)^2
 var_pc <- eigenvalues/sum(eigenvalues)
@@ -1566,8 +1559,8 @@ print(rownames(normal_df))
 # Collate MRD results as well
 results_df <- calcERM(response_df, normal_df, yeoh_label)
 results_df
-SUBTYPE <- "cs_quantile"
-write.table(results_df, sprintf("dump/features-%s.tsv", SUBTYPE),
+SUBTYPE
+write.table(results_df, sprintf("dump/features1-%s.tsv", SUBTYPE),
             sep = "\t", quote = F)
 
 par(mar=c(8,3,2,3))
@@ -1594,3 +1587,13 @@ for (r in 1:nrow(calibrated_features)) {
 subtype_parallel <- recordPlot()
 save_fig(subtype_parallel, sprintf("dump/parallel-%s.pdf", SUBTYPE),
          width = 10, height = 7)
+
+# LIKELIHOOD RATIO --------------------------------------------------------
+curve(dnorm(x,3), xlim=c(-3,3))
+
+restrictor <- function(x) x/(x+1)
+calcLR <- function(x) restrictor(dnorm(x,-3)/dnorm(x,3))
+curve(calcLR, xlim = c(-3,3))
+
+x <- rnorm(10000)
+hist(x, breaks = 100)

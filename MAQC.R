@@ -1,6 +1,7 @@
 library(reshape2)
 library(ggplot2)
 library(cowplot)
+library(rgl)
 # library(scran)
 # library(sva)
 # library(Harman)
@@ -602,28 +603,41 @@ plotPCA2D(subset_maqc, metadata_df)
 
 pca_obj <- prcomp(t(subset_maqc))
 # Identify batch effects features using loadings of PC2
-batch_probesets <- names(sort(abs(pca_obj$rotation[,2]), decreasing = T))
+batch_probesets <- names(sort(abs(pca_obj$rotation[,3]), decreasing = T))
 
 # # Remove batch effects features
 # corrected_maqc <- subset_maqc[!(rownames(subset_maqc) %in% batch_probesets),]
 # dim(corrected_maqc)
+dim(pca_obj$rotation)
 
 par(mfrow=c(4,2))
 par(mar=rep(2,4))
-idx <- 4000*4+1
-for(i in idx:(idx+3)) {
+idx <- 2100*8+1
+for(i in idx:(idx+7)) {
   y <- as.numeric(log_maqc[batch_probesets[i],])
-  bcm_y <- as.numeric(bcm_maqc[batch_probesets[i],])
+  # bcm_y <- as.numeric(bcm_maqc[batch_probesets[i],])
   print(batch_probesets[i])
   plot(1:60, y, pch = rep(rep(21:22, each = 5), 6), main = batch_probesets[i],
        cex = 2, bg = rep(2:7, each = 10))
-  plot(1:60, bcm_y, pch = rep(rep(21:22, each = 5), 6),
-       main = batch_probesets[i], cex = 2, bg = rep(2:7, each = 10))
+  # plot(1:60, bcm_y, pch = rep(rep(21:22, each = 5), 6),
+  #      main = batch_probesets[i], cex = 2, bg = rep(2:7, each = 10))
 }
 
 interesting_probesets <- recordPlot()
-save_fig(interesting_probesets, "dump/interesting_probesets1.pdf",
+idx
+save_fig(interesting_probesets, "dump/pc3_16801th_probeset.pdf",
          width = 8, height = 10)
+
+# Interesting probesets that are not heavily loaded in PC2 and PC3
+differential_b1n2 <- c("212600_s_at", "202530_at", "232028_at", "1557167_at")
+differential_rev_loadings <- pca_obj$rotation[differential_b1n2,]
+apply(abs(differential_rev_loadings), 1, rank)
+# Even though they are not heavily loaded in the PCs, the PCs still contribute
+# most to the probeset!!!
+
+# Smaller value smaller rank
+loadings_rank <- apply(abs(pca_obj$rotation), 2, rank)
+loadings_rank[differential_b1n2,]
 
 # Fitting a linear model
 y <- as.numeric(log_maqc["206766_at",])
@@ -1036,11 +1050,31 @@ before_correction <- bcm_maqc$plot[[1]]
 after_correction <- bcm_maqc$corrected_plot[[1]]                                                                                                                                                                                                                                                                                         
 after_rePCA <- plotPCA2D(bcm_maqc$data, metadata_df)
 after_correction
+after_rePCA
 
-ggsave("dump/maqc-after_bcmsvd_pca.pdf", after_rePCA)
+before <- plotPCA2D(subset_maqc, metadata_df)
+
+ggsave("dump/maqc-before_bcmsvd3_pca.pdf", after_rePCA)
 
 # Investigate correction vectors
 correction_vectors <- read.table("history/correction_log_maqc.tsv",
                                  sep = "\t", header = T, row.names = 1)
 hist(correction_vectors[,2], breaks = 100)
 
+pca_obj <- prcomp(t(subset_maqc))
+
+plotPCA3D(subset_maqc, colour = rep(2:3, each = 10),
+          pch = rep(rep(21:22, each = 5), 6))
+rgl.postscript("dump/pca_3d-maqc_b1n2.pdf", "pdf")
+
+plot(data.frame(pca_obj$x[,1:4]),
+     pch = rep(rep(21:22, each = 5), 2),
+     bg = rep(2:3, each = 10),
+     cex = 2)
+
+pairwise_plot <- recordPlot()
+save_fig(pairwise_plot, "dump/pairwise_pca.pdf",
+        width = 10, height = 8)
+
+subset_maqc <- log_maqc[,c(1:8,14:20)]
+plotPCA2D(subset_maqc, metadata_df)
