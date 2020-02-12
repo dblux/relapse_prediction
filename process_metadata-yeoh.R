@@ -215,3 +215,13 @@ levels(full_metadata_df$label)[3] <- "0"
 write.table(full_metadata_df,
             "data/GSE67684/processed/full_metadata.tsv",
             quote = F, sep = "\t")
+
+##### LABID to PID #####
+LABEL_RPATH <- "data/GSE67684/README/labels_MRD.tsv"
+annot_df <- read.table(LABEL_RPATH, header = T, sep = "\t", comment.char = "")
+pid <- sprintf("P%03d", annot_df[,2])
+labid_df <- data.frame(annot_df$labid, pid)
+colnames(labid_df)[1] <- "lab_id"
+LABID_WPATH <- "data/GSE67684/processed/metadata/lab_id.tsv"
+write.table(labid_df, LABID_WPATH,
+            quote = F, sep = "\t", row.names = F)

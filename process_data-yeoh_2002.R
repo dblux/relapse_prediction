@@ -162,36 +162,36 @@ yeoh_d33 <- read.table("data/leuk_D33/processed/mas5_filtered.tsv",
 ## Removal of outlier samples and their associated pairs
 # Patients "P198_D8", "P186_D0" are associated pairs
 outlier_samples <- c("P198_D0", "P186_D8", "N03", "P198_D8", "P186_D0")
-yeoh_d0d8 <- yeoh_d0d8[, !(colnames(yeoh_d0d8) %in% outlier_samples)]
-yeoh_normal <- yeoh_normal[, !(colnames(yeoh_normal) %in% outlier_samples)]
-
-# Selection of d33 remission samples
-d33_label <- yeoh_label[substring(colnames(yeoh_d33), 1, 4), "label", drop = F]
-# D33 patients that experience remission
-d33_remission <- rownames(d33_label)[d33_label == 0 & !is.na(d33_label)]
-yeoh_remission <- yeoh_d33[, paste0(d33_remission, "_D33")]
-
-# Added D33 samples and then removed them as batch 5 samples!!!
-yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
-
-## Remove samples with D0 and D8 from different batches and batch 5
 
 ## Identify patients with D0 and D8 profiles from different batches
 # for (i in seq(1,420,2)) {
 #   if (yeoh_batch[i,"batch"] != yeoh_batch[i+1,"batch"]) {
 #     print(yeoh_batch[i:(i+1),])
 #   }
+diffbatch_pid <- c("P107", "P110", "P112", "P113", "P114", "P118", "P168")
+outlier_pid <- c("P198", "P186", "N03")
+remove_pid <- c(diffbatch_pid, outlier_pid)
 
-patients_diffbatch <- c("P107", "P110", "P112", "P113", "P114", "P118", "P168")
-not_diffbatch <-
-  !(substring(colnames(yeoh_combined), 1, 4) %in% patients_diffbatch)
+yeoh_all <- cbind(yeoh_d0d8, yeoh_normal)
+logi_idx <- !(substring(colnames(yeoh_all), 1, 4) %in% remove_pid)
+subset_yeoh <- yeoh_all[,logi_idx]
+SUBSET_WPATH <- "data/GSE67684/processed/subset_yeoh.tsv"
+write.table(subset_yeoh, SUBSET_WPATH,
+            quote = F, sep = "\t")
+
+# # Selection of d33 remission samples
+# d33_label <- yeoh_label[substring(colnames(yeoh_d33), 1, 4), "label", drop = F]
+# # D33 patients that experience remission
+# d33_remission <- rownames(d33_label)[d33_label == 0 & !is.na(d33_label)]
+# yeoh_remission <- yeoh_d33[, paste0(d33_remission, "_D33")]
+
+# # Added D33 samples and then removed them as batch 5 samples!!!
+# yeoh_combined <- cbind(yeoh_d0d8, yeoh_remission, yeoh_normal)
+## Remove samples with D0 and D8 from different batches and batch 5
 
 # Batch 5 contains all D33 samples and P107_D*=8
 # As a result P107_D0 is removed as well
-not_batch5 <- metadata_df[colnames(yeoh_combined), "batch_info"] != 5
-
-subset_yeoh <- yeoh_combined[, not_batch5 & not_diffbatch]
 
 ### PREPROCESSING: SCALE->REMOVE->FILTER->LOG
 scaled_yeoh <- removeProbesets(normaliseMeanScaling(subset_yeoh))
-data_yeoh <- log2_transform(filterProbesets(scaled_yeoh), 0.7, metadata_df))
+data_yeoh <- log2_transform(filterProbesets(scaled_yeoh, 0.7, metadata_df))

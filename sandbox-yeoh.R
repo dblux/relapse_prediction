@@ -269,32 +269,31 @@ plot_vectors <- function(df, centroid_df, pc_labels,
   return(multiplot)
 }
 
-###### IMPORT DATA #####
-# Subsetted and preprocessed data
+
+# IMPORT DATA -------------------------------------------------------------
+## Subset of original data
 # Removed outliers, patients with timepoints from different batches and batch 5
-# SCALE->REMOVE->FILTER->LOG
-# scaled_yeoh <- removeProbesets(normaliseMeanScaling(subset_yeoh))
-# data_yeoh <- log2_transform(filterProbesets(scaled_yeoh), 0.7, metadata_df))
-
-data_yeoh <- read.table("data/GSE67684/processed/srfl_data.tsv", sep = "\t")
-# logi_idx <- rowSums(data_yeoh == 0) == 0
-# filtered_yeoh <- data_yeoh[logi_idx,]
-
-# Original data
-# yeoh_d0d8 <- read.table("data/GSE67684/processed/mas5_ordered.tsv", sep = "\t")
-# yeoh_normal <- read.table("data/leuk_normal/processed/mas5_filtered.tsv",
-#                           sep = "\t")
-# yeoh_d33 <- read.table("data/leuk_D33/processed/mas5_filtered.tsv",
-#                        sep = "\t", header = T, row.names = 1)
+SUBSET_RPATH <- "data/GSE67684/processed/subset_yeoh.tsv"
+subset_yeoh <- read.table(SUBSET_RPATH, sep = "\t")
+head(data_yeoh)
 
 ## Metadata
 # Preprocessed metadata
-metadata_df <- read.table("data/GSE67684/processed/metadata/full_metadata.tsv",
-                          sep = "\t")
-# yeoh_batch <- read.table("data/GSE67684/processed/metadata/metadata-batch.tsv",
-#                          sep = "\t", header = T, row.names = 1)
-# yeoh_label <- read.table("data/GSE67684/processed/metadata/metadata-label_mrd_subtype.tsv",
-#                          sep = "\t", header = T, row.names = 1)
+METADATA_RPATH <- "data/GSE67684/processed/metadata/full_metadata.tsv"
+metadata_df <- read.table(METADATA_RPATH, sep = "\t")
+
+# BATCH_RPATH <- "data/GSE67684/processed/metadata/metadata-batch.tsv"
+# LABEL_RPATH <- "data/GSE67684/processed/metadata/metadata-label_mrd_subtype.tsv"
+# yeoh_batch <- read.table(BATCH_RPATH, sep = "\t", header = T, row.names = 1)
+# yeoh_label <- read.table(LABEL_RPATH, sep = "\t", header = T, row.names = 1)
+
+# SCALE->REMOVE->FILTER->LOG
+scaled_yeoh <- removeProbesets(normaliseMeanScaling(subset_yeoh))
+data_yeoh <- log2_transform(filterProbesets(scaled_yeoh, 0.7, metadata_df))
+
+# # Filter out all rows with zero values
+# logi_idx <- rowSums(data_yeoh == 0) == 0
+# filtered_yeoh <- data_yeoh[logi_idx,]
 
 # QUANTILE ---------------------------------------------------------
 # ### QUANTILE (ALL)
@@ -1539,9 +1538,9 @@ results_df <- calcERM_PCA(bcm_df[intersect_probesets,], metadata_df)
 
 # QPSP --------------------------------------------------------------------
 # Import NEA
-nea_df <- read.table(paste0("../diff_expr/data/subnetwork/nea-hsa/",
-                            "ovarian_cancer/geneset-nea_kegg_ovarian.tsv"),
-                     sep = "\t", header = T, stringsAsFactors = F)
+NEA_RPATH <- paste0("../diff_expr/data/subnetwork/nea-hsa/",
+                    "ovarian_cancer/geneset-nea_kegg_ovarian.tsv")
+nea_df <- read.table(NEA_RPATH, sep = "\t", header = T, stringsAsFactors = F)
 subnetwork_nea <- split(as.character(nea_df$gene_id), nea_df$subnetwork_id)
 
 # 1. Removes affymetrix ambiguous and control probesets
@@ -1549,8 +1548,11 @@ subnetwork_nea <- split(as.character(nea_df$gene_id), nea_df$subnetwork_id)
 # Removes one-to-many probesets and probesets with no ID
 # Selects maximum if two probesets match to same gene
 # CHECK: What microarray platform is the data from?
-ANNOT_PROBESET_RPATH <- "../info/microarray/HG-U133A/annot_entrez-GPL96.tsv"
-entrez_yeoh <- affy2id(removeProbesets(subset_yeoh), ANNOT_PROBESET_RPATH)
+ENTREZ_GPL570 <- "../info/microarray/HG-U133_Plus_2/annot_entrez-GPL570.tsv"
+SYMBOL_GPL570 <- "../info/microarray/HG-U133_Plus_2/annot_genesymbol-GPL570.tsv"
+entrez_yeoh <- affy2id(data_yeoh, ENTREZ_GPL570)
+symbol_yeoh <- affy2id(data_yeoh, SYMBOL_GPL570)
+head(symbol_yeoh)
 
 # Calculate QPSP profiles
 gfs_yeoh <- normaliseGFS(entrez_yeoh, num_intervals = 4)
@@ -1907,8 +1909,6 @@ x <- 2^rgamma(5000, shape = 24.2, rate = 2.7)
 epsilon <- sampleError(5000)
 plot(log2(x), log2(x + epsilon),
      xlim = c(0, 20), ylim = c(0,20))
-
-
 
 orig_p1 <- 2^p1
 p1_p <- p1[p1 != 0]
