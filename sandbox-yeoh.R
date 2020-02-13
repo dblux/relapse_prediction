@@ -1677,9 +1677,9 @@ full_metadata_df[full_metadata_df$subtype == "Hypodiploid",]
 ##### SANDBOX: Same or different #####
 # # Cosine normalise data
 # normalised_yeoh <- normaliseCosine(data_yeoh)
+
+### Subset all D0 patients
 data_d0 <- data_yeoh[,endsWith(colnames(data_yeoh), "0")]
-## OPTION 2
-# data_d0 <- filtered_yeoh[,endsWith(colnames(data_yeoh), "0")]
 d0_metadata <- metadata_df[colnames(data_d0),]
 # Order metadata
 d0_metadata_ord <- d0_metadata[order(d0_metadata$batch_info),]
@@ -1723,9 +1723,9 @@ pheatmap(pair_dist, col = brewer.pal(9, "Blues"),
          legend = F, border_color = NA, scale = "none",
          cluster_rows = F, cluster_cols = F)
 
-# heatmap_b1b2 <- recordPlot()
-# save_fig(heatmap_b1b2, "dump/heatmap-dist_b1b2.pdf",
-#          width = 12, height = 8)
+heatmap_b8b9 <- recordPlot()
+save_fig(heatmap_b8b9, "dump/heatmap-dist_b8b9.pdf",
+         width = 12, height = 8)
 
 # Subtype breakdown for pair of batches
 pair_metadata <- d0_metadata_ord[c(pid_1, pid_2),]
@@ -1776,8 +1776,10 @@ getNN <- function(pairwise_mat, flag) {
   }  
 }
 
+getNN(pair_dist, "dist")
 getNN(pair_cor, "cor")
 getNN(pair_cor1, "cor")
+
 pair_cor1[1,]
 
 # Plot PCA before selecting features
@@ -1843,7 +1845,6 @@ calcCor(p1, p3)
 
 # corr_p1 <- sapply(pid_1, function(pid) cor(p1, data_d0_ordered[,pid]))
 # which.max(corr_p1)
-par(mfrow=c(1,2))
 
 fig1 <- ggplot(data.frame(p1, p2), aes(x = p1, y = p2)) +
   stat_density_2d(aes(fill = ..level..), geom = "polygon")
@@ -1854,8 +1855,11 @@ fig2 <- ggplot(data.frame(p1, p3), aes(x = p1, y = p3)) +
 density_plot <- plot_grid(fig1, fig2, ncol = 2)
 density_plot
  
+par(mfrow=c(1,2))
 plot(p1, p2) # Correct
 plot(p1, p3) # Wrong
+cor_plot <- recordPlot()
+save_fig(cor_plot, "dump/scatter-cor.pdf", 12, 6)
 
 # Investigating patterns in zero values
 # No pattern in dispersion of values that accompany zeros
@@ -1870,12 +1874,17 @@ sum(logi1 & logi2)
 
 sum(xor_logi2)
 sum(logi1 & logi3)
+# P3 has disproportionately little zeros? Try other patientss
 
 mat1 <- cbind(p1, p2)[xor_logi1,]
 mat2 <- cbind(p1, p3)[xor_logi2,]
 
-hist(mat1[mat1[,2] == 0, 1])
-hist(mat2[mat2[,2] == 0, 1])
+hist(mat1[mat1[,1] == 0, 2], breaks = 15,
+     xlab = NULL, main = "Zero-signal values [P1 (0) vs P2]")
+hist(mat2[mat2[,1] == 0, 2], breaks = 16,
+     xlab = NULL, main = "Zero-signal values [P1 (0) vs P3]")
+hist_plot <- recordPlot()
+save_fig(hist_plot, "dump/hist-xzero_ysignal.pdf", 12, 6)
 
 cor(p1, p2)
 cor(p2, p1)
@@ -1895,9 +1904,13 @@ calcCor <- function(v1, v2) {
 pair_cor <- calcPairwise(data_d0_ordered, pid_1, pid_2, cor)
 pair_cor1 <- calcPairwise(data_d0_ordered, pid_1, pid_2, calcCor)
 
-pheatmap(pair_cor1, col = brewer.pal(9, "Blues"),
+pheatmap(pair_cor, col = brewer.pal(9, "Blues"),
          legend = F, border_color = NA, scale = "none",
          cluster_rows = F, cluster_cols = F)
+
+heatmap_b8b9_cor <- recordPlot()
+save_fig(heatmap_b8b9_cor, "dump/heatmap-cor_b8b9.pdf",
+         width = 12, height = 8)
 
 epsilon <- rnorm(3000, 10, 1000)
 

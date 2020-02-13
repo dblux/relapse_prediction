@@ -1,5 +1,8 @@
 # Files and directories to ignore
 data/
 history/
+.ipynb_checkpoints/
+
 .Rhistory
 .RData
+

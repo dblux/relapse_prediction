@@ -51,6 +51,29 @@ AFFY_WPATH <- "data/GSE67684/processed/rna_seq/temp_affy.tsv"
 data_rna <- read.table(RNA_WPATH, sep = "\t")
 data_yeoh <- read.table(AFFY_WPATH, sep = "\t")
 
+LENGTH_RPATH <- "../info/ref_genome/GRCh38/gene_length.tsv"
+length_df <- read.table(LENGTH_RPATH, sep = "\t", header = T)
+head(length_df)
 # MAIN --------------------------------------------------------------------
+rownames(subset_rna)
+
+# Log2 normalised microarray vs log2 raw counts
+# Same patients are not present in microarray data
+intersect_pid <- intersect(colnames(data_rna), colnames(data_yeoh)) 
+
+pid <- intersect_pid[1]
+print(pid)
+x <- log2_transform(data_rna[,pid])
+colnames(data_yeoh)
+r <- cor(data_yeoh[,pid], x)
+XLAB <- "Normalised microarray (log2)"
+YLAB <- "RNA-Seq raw counts (log2)"
+MAIN <- sprintf("%s (r = %.3f)", pid, r)
+plot(data_yeoh[,pid], x,
+     xlab = XLAB, ylab = YLAB, main = MAIN)
+log_rna <- recordPlot()
+save_fig(log_rna, "dump/scatter-log_rna.pdf", 8, 8)
 
 
+
+hist(x, breaks = 100)
