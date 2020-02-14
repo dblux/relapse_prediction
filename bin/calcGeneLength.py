@@ -4,19 +4,6 @@
 import numpy as np
 import argparse
 
-parser = argparse.ArgumentParser()
-parser.add_argument("input", # Positional argument
-                    help = "Ensembl GTF file path")
-parser.add_argument("--output", # Optional argument
-                    help = "Output file path")
-args = parser.parse_args()
-print(args.input)
-
-RPATH = "../../info/ref_genome/GRCh38/ensembl-Homo_sapiens.GRCh38.99.gtf"
-WPATH = "gene_lengths.tsv"
-
-#%%
-
 class Gene:
     def __init__(self, name):
         self.name = name
@@ -40,13 +27,12 @@ class Gene:
         ]
         return max(transcript_lengths)
 
-#%%
-def main():
-    fw = open(WPATH, "w")
+def calcGeneLength(rpath, wpath):
+    fw = open(wpath, "w")
     header = "gene_name\tmean_length\tmedian_length\tmax_length\n"
     fw.write(header)
     
-    with open(RPATH) as gtf:
+    with open(rpath) as gtf:
         # Assumption: Feature type is always ordered "gene, transcript, exon"
         for line in gtf: # iterator
             if not line.startswith("#"): # ignore comments
@@ -55,7 +41,7 @@ def main():
                 if record[2] == "gene":
                     # If object gene exists -> Write lengths to file
                     try:
-                        print(gene.transcripts)
+                        # print(gene.transcripts)
                         wline = "{}\t{}\t{}\t{}\n".format(
                             gene.name, gene.calcMean(),
                             gene.calcMedian(), gene.calcMax()
@@ -84,3 +70,17 @@ def main():
                     gene.transcripts[transcript_name].append(exon_length)
     
     fw.close()
+
+if __name__ == "__main__":
+    DOCSTRING = "Calculates gene lengths from Ensembl reference genome GTF file"
+    WPATH = "gene_lengths.tsv"
+    
+    parser = argparse.ArgumentParser(description=DOCSTRING)
+    parser.add_argument("infile", # Positional argument
+                        help = "Ensembl GTF file path")
+    parser.add_argument("-o", "--outfile", # Optional argument
+                        help = "Output file path",
+                        default=WPATH)
+    args = parser.parse_args()
+        
+    calcGeneLength(args.infile, args.outfile)
