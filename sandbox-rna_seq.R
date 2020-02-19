@@ -34,8 +34,10 @@ logi_idx <- labid_data %in% rownames(labid_df)
 subset_rna <- raw_rna[,logi_idx]
 # Replace labid of subsetted patients with pid
 colnames(subset_rna) <- labid_df[labid_data[logi_idx],]
-colnames(subset_rna)[1:67] <- paste(colnames(subset_rna)[1:67], "D0", sep = "_")
-colnames(subset_rna)[68:134] <- paste(colnames(subset_rna)[68:134], "D8", sep = "_")
+colnames(subset_rna)[1:67] <- paste(colnames(subset_rna)[1:67],
+                                    "D0", sep = "_")
+colnames(subset_rna)[68:134] <- paste(colnames(subset_rna)[68:134],
+                                      "D8", sep = "_")
 
 # Check whether the feature names intersect
 intersect_genes <- intersect(rownames(symbol_yeoh), rownames(subset_rna))
@@ -51,9 +53,9 @@ AFFY_WPATH <- "data/GSE67684/processed/rna_seq/temp_affy.tsv"
 data_rna <- read.table(RNA_WPATH, sep = "\t")
 data_yeoh <- read.table(AFFY_WPATH, sep = "\t")
 
-LENGTH_RPATH <- "../info/ref_genome/GRCh38/gene_length.tsv"
-length_df <- read.table(LENGTH_RPATH, sep = "\t", header = T)
-head(length_df)
+LENGTH_RPATH <- "../info/ref_genome/GRCh38/GRCh38_99-gene_lengths.tsv"
+length_df <- read.table(LENGTH_RPATH, sep = "\t", header = T, row.names = 1)
+
 # MAIN --------------------------------------------------------------------
 rownames(subset_rna)
 
@@ -74,6 +76,10 @@ plot(data_yeoh[,pid], x,
 log_rna <- recordPlot()
 save_fig(log_rna, "dump/scatter-log_rna.pdf", 8, 8)
 
-
-
 hist(x, breaks = 100)
+
+### Normalisation of RNA-Seq data
+rownames(subset_rna)
+# Check that genes in data have corresponding length info
+rownames(subset_rna)[!(rownames(subset_rna) %in% rownames(length_df))]
+rownames(length_df)[startsWith(rownames(length_df), "LOC")]
