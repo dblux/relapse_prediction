@@ -71,8 +71,10 @@ rownames(metadata_df) <- colnames(raw_maqc)
 
 # SCALE->REMOVE->FILTER->LOG
 scaled_maqc <- removeProbesets(normaliseMeanScaling(raw_maqc))
-filtered_maqc <- filterProbesets(scaled_maqc, 0.7, metadata_df)
+# scaled_maqc <- normaliseMeanScaling(raw_maqc)
+filtered_maqc <- filterProbesets(scaled_maqc, 0.7, metadata_df1)
 log_maqc <- log2_transform(filtered_maqc)
+subset_maqc <- log_maqc[,1:20]
 
 # Investigate additive batch effects --------------------------------------
 par(mfrow=c(1,2))

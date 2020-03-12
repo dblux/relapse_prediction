@@ -1,3 +1,5 @@
+library(Biocomb)
+
 library(reshape2)
 library(rgl)
 library(ggplot2)
@@ -206,6 +208,26 @@ plotPCA3DYeoh <- function(df1, metadata_df) {
   plotPCA3D(df1, batch_colour, timepoint_shape)
 }
 
+# Plot PCA before selecting features
+# Batch information of all the timepoints
+plotPCA3DYeoh1 <- function(df1, metadata_df) {
+  batch_info <- metadata_df[colnames(df1), "batch_info"]
+  batch_factor <- droplevels(as.factor(batch_info))
+  print(batch_factor)
+  print(levels(batch_factor))
+  levels(batch_factor) <- 21:22
+  pch <- as.numeric(as.character(batch_factor))
+  # generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+  # batch_palette <- generate_colour(10)
+  
+  # Shape of all timepoints
+  class_info <- metadata_df[colnames(df1), "subtype"]
+  palette <- brewer.pal(10, "Set3")
+  col <- palette[class_info]
+  
+  plotPCA3D(df1, col, pch)
+}
+
 plot.vectors_3d <- function(vectors_arr, colour_code, shape_vec,
                             pc_labels = NULL, ratio_list = list(2,1,1)) {
   if (is.null(pc_labels)) {
@@ -269,13 +291,11 @@ plot_vectors <- function(df, centroid_df, pc_labels,
   return(multiplot)
 }
 
-
 # IMPORT DATA -------------------------------------------------------------
 ## Subset of original data
 # Removed outliers, patients with timepoints from different batches and batch 5
 SUBSET_RPATH <- "data/GSE67684/processed/subset_yeoh.tsv"
 subset_yeoh <- read.table(SUBSET_RPATH, sep = "\t")
-head(data_yeoh)
 
 ## Metadata
 # Preprocessed metadata
@@ -1681,9 +1701,51 @@ full_metadata_df[full_metadata_df$subtype == "Hypodiploid",]
 ### Subset all D0 patients
 data_d0 <- data_yeoh[,endsWith(colnames(data_yeoh), "0")]
 d0_metadata <- metadata_df[colnames(data_d0),]
-# Order metadata
-d0_metadata_ord <- d0_metadata[order(d0_metadata$batch_info),]
-data_d0_ordered <- data_d0[,rownames(d0_metadata_ord)]
+# # Order metadata
+# d0_metadata_ord <- d0_metadata[order(d0_metadata$batch_info),]
+# data_d0_ordered <- data_d0[,rownames(d0_metadata_ord)]
+
+### FEATURE SELECTION (CHI2) ###
+# Add class labels to each individual sample (row)
+## Run the chi2 algorithm n times (one vs rest)
+t_d0 <- t(data_d0)
+subtype <- d0_metadata[rownames(t_d0), "subtype"] -> original_subtype
+subtype <- original_subtype
+
+chi2_features <- character()
+for (i in 1:9) {
+  subtype <- original_subtype
+  levels(subtype)[-i] <- "Rest"
+  weka_d0 <- data.frame(t_d0, subtype)
+  selected_d0 <- chi2.algorithm(weka_d0, numeric(), threshold = 0)
+  # Selected features
+  chi2_features <- c(chi2_features, colnames(selected_d0[[1]]))
+}
+
+writeLines(substring(chi2_features, 2), con = "dump/chi2_features.txt")
+
+
+X <- data_d0[substring(chi2_features, 2),]
+y <- metadata_df[colnames(X),]
+X <- X[,order(y$subtype)]
+
+subtype_df <- metadata_df[colnames(data_d0), "subtype", drop = F]
+pheatmap(X, col = brewer.pal(9, "Blues"),
+         legend = T, border_color = NA, scale = "none",
+         cluster_rows = T, cluster_cols = F,
+         show_colnames = F, show_rownames = F,
+         annotation_col = subtype_df)
+heatmap <- recordPlot()
+save_fig(heatmap, "dump/heatmap-chi2.pdf")]
+
+# ## Save only D0 patients for WEKA
+# # Add class labels to each individual sample (row)
+# t_d0 <- t(data_d0)
+# subtype <- d0_metadata[rownames(t_d0), "subtype"]
+# weka_d0 <- cbind(t_d0, subtype)
+# 
+# write.table(weka_d0, "temp/weka_d0.csv", sep = ",", quote = F,
+#             row.names = F, col.names = T)
 
 ## Batch-subtype configuration
 table(d0_metadata_ord$batch_info, d0_metadata_ord$subtype)
@@ -1782,28 +1844,61 @@ getNN(pair_cor1, "cor")
 
 pair_cor1[1,]
 
-# Plot PCA before selecting features
-# Batch information of all the timepoints
-plotPCA3DYeoh1 <- function(df1, metadata_df) {
-  batch_info <- metadata_df[colnames(df1), "batch_info"]
-  batch_factor <- as.factor(batch_info)
-  levels(batch_factor) <- 21:22
-  pch <- as.numeric(as.character(batch_factor))
-  # generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-  # batch_palette <- generate_colour(10)
-  
-  # Shape of all timepoints
-  class_info <- metadata_df[colnames(df1), "subtype"]
-  palette <- brewer.pal(10, "Set3")
-  col <- palette[class_info]
-  
-  plotPCA3D(df1, col, pch)
-}
+
 
 plotPCA3DYeoh1(data_yeoh[,all_pid], metadata_df)
 # rgl.postscript("dump/pca_3d-b7b8_d0.pdf", "pdf")
 
-X <- data_yeoh[,all_pid]
+### Chi-square selected genes from yeoh_2002 ###
+# Neither probesets nor gene symbols correspond with current technology
+CHI_GENES <- "data/yeoh_2002/README/chi_square_probesets/combined.tsv"
+chi_genes <- read.delim(CHI_GENES)
+chi_symbols <- levels(chi_genes$gene_symbol)[-1]
+
+SYMBOL_GPL570 <- "../info/microarray/HG-U133_Plus_2/annot_genesymbol-GPL570.tsv"
+affy_yeoh <- affy2id(data_yeoh, SYMBOL_GPL570)
+intersect(chi_symbols, rownames(affy_yeoh))
+
+plotPCA3DYeoh1(data_yeoh[chi_genes,all_pid], metadata_df)
+
+### SELECTING GENE SIGNATURES OF SUBTYPES ###
+# Using only D0 samples
+# T-test based on the ranks
+getTTestFeatures <- function(data, subtype) {
+  col_idx <- which(metadata_df[colnames(data), "subtype"] == subtype)
+  ordered_data <- cbind(data[,col_idx], data[,-col_idx])
+  pvalue <- calc_ttest(ordered_data, length(col_idx), is_paired = F)
+  names(head(sort(pvalue), 20))
+}
+
+filtered_d0 <- filterProbesets(data_d0, 0.95, metadata_df)
+
+list_probesets <- sapply(levels(metadata_df$subtype),
+                    getTTestFeatures, data = filtered_d0)
+# Hypodiploid and Normal are not included
+probesets <- unique(unlist(list_probesets, use.names = F))
+
+# Ordering data_d0 according to subtype
+subtype_info <- metadata_df[colnames(data_d0), "subtype"]
+col_idx <- order(subtype_info)
+
+subtype_df <- metadata_df[colnames(data_d0), "subtype", drop = F]
+ordered_d0 <- data_d0[probesets, col_idx]
+ps_median <- apply(ordered_d0, 1, median)
+ps_mad <- apply(ordered_d0, 1, mad)
+znorm_d0 <- (ordered_d0 - ps_median)/ ps_mad
+znorm_d0[1:5,1:5]
+cust_pal <- c(rep("#67001F", 45),
+              brewer.pal(11, "RdBu"),
+              rep("#053061", 5))
+
+# FOR PROGNOSTIC MARKERS. USUALLY UNIQUELY HIGH EXPRESSION..
+# ..FOR THAT SUBTYPE, REST ARE ZERO VALUES
+
+pheatmap(znorm_d0, color = cust_pal,
+         legend = T, border_color = NA, scale = "none",
+         cluster_rows = F, cluster_cols = F,
+         annotation_col = subtype_df)
 
 # Correlation ignoring all zeros
 # Correlated data
@@ -1947,3 +2042,168 @@ rgl.postscript("dump/pca_3d-b7b8.pdf", "pdf")
 
 hcluster <- hclust(pw_dist)
 dendo_obj1 <- as.dendrogram(hcluster)
+
+##### PLOTS #####
+# Choosing the batches
+pid_1 <- rownames(d0_metadata)[d0_metadata$batch_info == 1]
+pid_2 <- rownames(d0_metadata)[d0_metadata$batch_info == 2]
+all_pid <- c(pid_1, pid_2)
+batch_1_2 <- data_d0[,all_pid]
+
+## B1 vs B2
+plotPCA3DYeoh1(batch_1_2, metadata_df)
+pca_obj <- prcomp(t(batch_1_2))
+rot_mat <- pca_obj$rotation
+
+# PC1
+desc_ps <- names(sort(abs(rot_mat[,1]), decreasing = TRUE))
+b_1_2_pc1_1 <- batch_1_2[desc_ps[1:21],]
+b_1_2_pc1_2 <- batch_1_2[desc_ps[101:121],]
+
+# PC2
+desc_ps <- names(sort(abs(rot_mat[,2]), decreasing = TRUE))
+b_1_2_pc2_1 <- batch_1_2[desc_ps[1:21],]
+b_1_2_pc2_2 <- batch_1_2[desc_ps[5001:5021],]
+
+x <- b_1_2_pc2_2
+figname <- "b_1_2_pc2_2"
+plotMulti(x, metadata_df)
+ps_plot <- recordPlot()
+save_fig(ps_plot, sprintf("dump/%s-scatter.pdf", figname), 11, 15)
+
+plotMultiHist(x, metadata_df)
+ps_hist <- recordPlot()
+save_fig(ps_hist, sprintf("dump/%s-hist.pdf", figname), 11, 15)
+
+
+
+## B8 vs B9
+plotPCA3DYeoh1(batch_8_9, metadata_df)
+pca_obj <- prcomp(t(batch_8_9))
+rot_mat <- pca_obj$rotation
+
+# PC1
+desc_ps <- names(sort(abs(rot_mat[,1]), decreasing = TRUE))
+b_8_9_pc1_1 <- batch_8_9[desc_ps[1:21],]
+b_8_9_pc1_2 <- batch_8_9[desc_ps[5001:5021],]
+
+# PC2
+desc_ps <- names(sort(abs(rot_mat[,2]), decreasing = TRUE))
+b_8_9_pc2_1 <- batch_8_9[desc_ps[1:21],]
+b_8_9_pc2_2 <- batch_8_9[desc_ps[5001:5021],]
+
+x <- b_8_9_pc2_2
+figname <- "b_8_9_pc2_2"
+plotMulti(x, metadata_df)
+ps_plot <- recordPlot()
+save_fig(ps_plot, sprintf("dump/%s-scatter.pdf", figname), 11, 15)
+
+plotMultiHist(x, metadata_df)
+ps_hist <- recordPlot()
+save_fig(ps_hist, sprintf("dump/%s-hist.pdf", figname), 11, 15)
+
+# Batch effect
+ps4 <- "214250_at" #b12
+ps1 <- "210116_at" #b12
+ps5 <- "218895_at" #b12
+
+# Class effect
+ps8 <- "211005_at" #b12
+
+# No effect
+ps2 <- "203209_at" #b12
+ps3 <- "219935_at" #b12
+
+# Both
+ps6 <- "221566_s_at" #maqc
+ps7 <- "201608_s_at" #maqc
+
+rownames(subset_maqc)
+x <- batch_1_2[c(ps4, ps1, ps5),]
+
+plotSample(x, metadata_df)
+ps_sample <- recordPlot()
+save_fig(ps_sample, sprintf("dump/ps-batch.pdf"), 10, 9)
+
+plotMulti <- function(X, metadata_df, subplot=c(7,3)) {
+  cat(dim(X))
+  n_feat <- nrow(X)
+  n <- ncol(X)
+  ### Plot parameters
+  # Shape: Batch
+  batch_info <- metadata_df[colnames(X), "batch_info"]
+  batch_factor <- droplevels(as.factor(batch_info))
+  print(batch_factor)
+  print(levels(batch_factor))
+  levels(batch_factor) <- 16:17
+  pch <- as.numeric(as.character(batch_factor))
+  # Colour: Subtype
+  class_info <- metadata_df[colnames(X), "subtype"]
+  palette <- brewer.pal(9, "Set1")
+  col <- palette[class_info]
+  
+  par(mfrow=subplot, mar=rep(2.3,4))
+  for (i in 1:n_feat) {
+    plot(1:n, X[i,], cex = 1.5, col = col, pch = pch, main = rownames(X)[i])
+  }
+  par(mfrow=c(1,1))
+}
+
+plotMultiHist <- function(X, metadata_df, subplot=c(7,3)) {
+  cat(dim(X))
+  n_feat <- nrow(X)
+  n <- ncol(X)
+  ### Plot parameters
+  # Shape: Batch
+  batch_info <- metadata_df[colnames(X), "batch_info"]
+  batch_factor <- droplevels(as.factor(batch_info))
+  print(batch_factor)
+  print(levels(batch_factor))
+  levels(batch_factor) <- 16:17
+  pch <- as.numeric(as.character(batch_factor))
+  # Colour: Subtype
+  class_info <- metadata_df[colnames(X), "subtype"]
+  palette <- brewer.pal(9, "Set1")
+  col <- palette[class_info]
+  
+  par(mfrow=subplot, mar=rep(2.3,4))
+  for (i in 1:n_feat) {
+    hist(data.matrix(X[i, batch_factor == 16]),
+         main = rownames(X)[i],
+         seq(0,16,0.5), col = rgb(1,0,0,0.2))
+    hist(data.matrix(X[i, batch_factor == 17]),
+         seq(0,16,0.5), col = rgb(0,1,0,0.2), add = T)
+  }
+  par(mfrow=c(1,1))
+}
+
+plotSample <- function(X, metadata_df, subplot=c(3,2)) {
+  cat(dim(X))
+  n_feat <- nrow(X)
+  n <- ncol(X)
+  ### Plot parameters
+  # Shape: Batch
+  batch_info <- metadata_df[colnames(X), "batch_info"]
+  batch_factor <- droplevels(as.factor(batch_info))
+  print(batch_factor)
+  print(levels(batch_factor))
+  levels(batch_factor) <- 16:17
+  pch <- as.numeric(as.character(batch_factor))
+  # Colour: Subtype
+  class_info <- metadata_df[colnames(X), "subtype"]
+  palette <- brewer.pal(9, "Set1")
+  col <- palette[class_info]
+  
+  par(mfrow=subplot, mar=rep(2.5,4))
+  for (i in 1:n_feat) {
+    plot(1:n, X[i,], cex = 1.5, col = col, pch = pch, main = rownames(X)[i])
+    hist(data.matrix(X[i, batch_factor == 16]),
+         main = rownames(X)[i],
+         seq(0,16,0.5), col = rgb(1,0,0,0.2))
+    hist(data.matrix(X[i, batch_factor == 17]),
+         seq(0,16,0.5), col = rgb(0,1,0,0.2), add = T)
+  }
+  par(mfrow=c(1,1))
+}
+
+

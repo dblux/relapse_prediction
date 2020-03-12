@@ -84,7 +84,7 @@ def readEnsembl(rpath):
                 # Depends on previous transcript name
                 gene.transcripts[transcript_name].append(exon_length)
     
-    # Save last gene object
+    # Saves last gene object
     save2Dict(gene)
     gtf.close() 
     
@@ -154,7 +154,7 @@ def readNCBI(rpath):
                     # Append length of exon to list    
                     gene.transcripts[exon_transcript].append(exon_length)
     
-    # Save last gene object
+    # Saves last gene object
     save2Dict(gene)
     gtf.close()
     
