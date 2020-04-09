@@ -1,5 +1,3 @@
-library(rgl)
-
 ### INVESTIGATING DECISION RULES ###
 # Set A of 3 features: ERM1, l2norm_d0_d8, d0_normal_proj
 # Set B of 3 features: ERM1, l2norm_d0_d8, angle_d0_d8
@@ -47,7 +45,6 @@ X_y
 write.table(X_y,
             "dump/sampled_Others-lr.tsv",
             quote = F, sep = "\t")
-
 # # Plot
 # par(mfrow=c(5,1))
 # par(mar=rep(1,4))

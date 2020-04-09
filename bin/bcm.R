@@ -268,6 +268,7 @@ correctGlobalBCM <- function(df1, metadata_df) {
                            function(df1) df1[,endsWith(colnames(df1), "D0"),
                                              drop = F])
   print(str(list_subset_d0))
+  # TODO: Throw error when any member of list has an empty dataframe!!!
   # Calculate trimmed mean centroids
   list_d0_centroids <- lapply(list_subset_d0,
                               function(df1) apply(df1, 1, mean, trim = 0.2))

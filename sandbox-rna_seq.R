@@ -32,6 +32,7 @@ labid_data <- unlist(lapply(strsplit(colnames(raw_rna), "_"),
 # Only select patients present in microarray data
 logi_idx <- labid_data %in% rownames(labid_df)
 subset_rna <- raw_rna[,logi_idx]
+labid_df
 # Replace labid of subsetted patients with pid
 colnames(subset_rna) <- labid_df[labid_data[logi_idx],]
 colnames(subset_rna)[1:67] <- paste(colnames(subset_rna)[1:67],
