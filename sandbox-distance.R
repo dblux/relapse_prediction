@@ -1,23 +1,24 @@
-library(reshape2)
 library(rgl)
+library(reshape2)
 library(ggplot2)
 library(cowplot)
 library(reshape2)
 library(RColorBrewer)
 library(dplyr)
 library(pheatmap)
-# library(Rtsne)
+library(Rtsne)
 # library(dendextend)
 # library(cluster)
 
 # library(xtable)
+library(MASS)
 
 source("../functions.R")
 source("bin/bcm.R")
 
 # theme_set(theme_dark())
 # theme_set(theme_gray())
-theme_set(theme_cowplot())
+## theme_set(theme_cowplot())
 
 # FUNCTIONS ---------------------------------------------------------------
 # Selecting drug responsive genes between D0 and D8
@@ -65,8 +66,10 @@ plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
   rgl.viewpoint(zoom = 0.8)
   # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
   par3d(windowRect = c(50, 20, 500, 500))
-  with(pca_df, pch3d(PC1, PC2, PC3, bg = colour,
-                     pch = pch, cex = 0.5, lwd = 1.5))
+  pch3d(pca_df[,1], pca_df[,2], pca_df[,3], col = colour,
+                pch = pch, cex = 0.5, lwd = 1.5)
+  # with(pca_df, pch3d(PC1, PC2, PC3, bg = colour,
+  #                    pch = pch, cex = 0.5, lwd = 1.5))
   box3d(col = "black")
   title3d(xlab = pc_labels[1], ylab = pc_labels[2],
           zlab = pc_labels[3], col = "black")
@@ -96,7 +99,7 @@ plotPCA3DYeoh1 <- function(df1, metadata_df) {
   batch_factor <- droplevels(as.factor(batch_info))
   print(batch_factor)
   print(levels(batch_factor))
-  levels(batch_factor) <- 21:22
+  levels(batch_factor) <- 16:17
   pch <- as.numeric(as.character(batch_factor))
   # generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
   # batch_palette <- generate_colour(10)
@@ -105,7 +108,7 @@ plotPCA3DYeoh1 <- function(df1, metadata_df) {
   class_info <- metadata_df[colnames(df1), "subtype"]
   palette <- brewer.pal(10, "Set3")
   col <- palette[class_info]
-  
+  print(col)
   plotPCA3D(df1, col, pch)
 }
 
@@ -128,7 +131,6 @@ metadata_df <- read.table(METADATA_RPATH, sep = "\t")
 # SCALE->REMOVE->FILTER->LOG
 scaled_yeoh <- removeProbesets(normaliseMeanScaling(subset_yeoh))
 data_yeoh <- log2_transform(filterProbesets(scaled_yeoh, 0.7, metadata_df))
-
 ##### SANDBOX: Same or different #####
 # # Cosine normalise data
 # normalised_yeoh <- normaliseCosine(data_yeoh)
@@ -141,9 +143,215 @@ d0_metadata_ord <- d0_metadata[order(d0_metadata$batch_info),]
 data_d0_ordered <- data_d0[,rownames(d0_metadata_ord)]
 
 # Choosing the batches
-pid_1 <- rownames(d0_metadata_ord)[d0_metadata_ord$batch_info == 8]
-pid_2 <- rownames(d0_metadata_ord)[d0_metadata_ord$batch_info == 9]
+pid_1 <- rownames(d0_metadata_ord)[d0_metadata_ord$batch_info == 1]
+pid_2 <- rownames(d0_metadata_ord)[d0_metadata_ord$batch_info == 2]
 all_pid <- c(pid_1, pid_2)
+print(all_pid)
+pair_d0 <- data_d0[,all_pid]
+
+## TODO: How to deal with ties?
+
+# ### Rank within samples
+# rank_samples <- apply(-pair_d0, 2, rank, ties.method="min")
+# print(rank_samples[1:5,1:5])
+# print(pair_d0[1:5,1:5])
+# ranksamples_mat <- as.matrix(dist(t(rank_samples), method="canberra"))
+# ranksamples_b1b2 <- ranksamples_mat[pid_1, pid_2]
+# ranksamples_b1b1 <- ranksamples_mat[pid_1, pid_1]
+# 
+# ## Within the same batch
+# for(p1 in rownames(ranksamples_b1b1)) {
+#   p1_subtype <- as.character(d0_metadata[p1,"subtype"])
+# 
+#   p2 <- pid_1[which(rank(ranksamples_b1b1[p1,]) == 2)]
+#   p2_subtype <- as.character(d0_metadata[p2,"subtype"])
+# 
+#   msg <- sprintf("%s (%s): %s (%s)\n", p1, p1_subtype, p2, p2_subtype)
+#   cat(msg)
+# }
+# 
+# getNN(ranksamples_b1b2, flag="dist")
+# getNN(ranksamples_b1b2, flag="dist")
+
+### Rank within features
+rank_features <- apply(-pair_d0, 1, rank, ties.method="min") # samples are rows already!
+print(t(rank_features)[1:5,1:5])
+print(pair_d0[1:5,1:5])
+rankfeatures_mat <- as.matrix(dist(rank_features, method="canberra"))
+
+# rankfeatures_b1b2 <- rankfeatures_mat[pid_1, pid_2]
+# rankfeatures_b1b1 <- rankfeatures_mat[pid_1, pid_1]
+# getNN(rankfeatures_b1b2, flag="dist")
+
+## Within the same batch
+for(p1 in rownames(rankfeatures_b1b1)) {
+  p1_subtype <- as.character(d0_metadata[p1,"subtype"])
+  p2 <- pid_1[which(rank(rankfeatures_b1b1[p1,]) == 2)]
+  canberra_dist <- rankfeatures_b1b1[p1,p2]
+  p2_subtype <- as.character(d0_metadata[p2,"subtype"])
+
+  msg <- sprintf("%s (%s): %s (%s) - %.2f\n",
+                 p1, p1_subtype, p2, p2_subtype, canberra_dist)
+  cat(msg)
+}
+
+## Analyse why it is not good even within the same batch?
+
+### ENTIRE DATASET ###
+## Apply non-metric MDS to similarity matrix
+data_metadata <- metadata_df[colnames(data_yeoh),]
+pid_order <- rownames(data_metadata)[order(data_metadata$batch_info)]
+X <- data_yeoh[,pid_order]
+
+rank_features <- apply(-X, 1, rank, ties.method="min") # samples are rows already!
+rankfeatures_dist <- dist(rank_features, method="canberra")
+rankfeatures_mat <- as.matrix(rankfeatures_dist)
+
+## MDS
+mds_rankfeatures <- isoMDS(rankfeatures_dist, k = 50) # non-metric MDS
+mds_coords <- mds_rankfeatures$points
+# mds_rankfeatures <- cmdscale(rankfeatures_dist, k = 3) # metric MDS
+# mds_coords <- mds_rankfeatures
+
+## Dimension reduction: PCA
+pca_mds_coords <- prcomp(mds_coords)$x[,1:10]
+## Dimension reduction: T-SNE
+tsne_mds <- Rtsne(mds_coords, dims = 2, theta = 0,
+                  pca = TRUE, complexity = 30)
+tsne_mds_coords <- tsne_mds$Y
+
+## PCA
+pca_coords <- prcomp(t(X))$x[,1:3]
+
+## T-sne
+tsne_data <- Rtsne(t(X), dims = 2, theta = 0,
+                   pca = TRUE, complexity = 30)
+tsne_coords <- tsne_data$Y
+
+metadata_df$batch_info <- as.factor(metadata_df$batch_info)
+
+## COMPARING SIMILARITY MATRICES
+pheatmap(rankfeatures_mat, col = brewer.pal(9, "Blues"),
+         legend = F, border_color = NA, scale = "none",
+         annotation_col = metadata_df[,1:2],
+         show_colnames = F, show_rownames = F,
+         cluster_rows = F, cluster_cols = F)
+rankdiff_heatmap <- recordPlot()
+save_fig(rankdiff_heatmap, "dump/heatmap-rankdiff.pdf",
+         width = 8, height = 8)
+
+euclid_mat <- as.matrix(dist(t(X)))
+pheatmap(euclid_mat, col = brewer.pal(9, "Blues"),
+         legend = F, border_color = NA, # scale = "none",
+         annotation_col = metadata_df[,1:2],
+         show_colnames = F, show_rownames = F,
+         cluster_rows = F, cluster_cols = F)
+euclid_heatmap <- recordPlot()
+save_fig(euclid_heatmap, "dump/heatmap-euclid.pdf",
+         width = 8, height = 8)
+
+## Histogram of distances
+hist(euclid_mat, breaks = 30)
+hist(rankfeatures_dist, breaks = 30)
+
+## Scatter plots
+batch_info <- metadata_df[colnames(X), "class_info"]
+batch_factor <- droplevels(as.factor(batch_info))
+print(batch_factor)
+print(levels(batch_factor))
+levels(batch_factor) <- 21:23
+pch <- as.numeric(as.character(batch_factor))
+
+# Shape of all timepoints
+class_info <- metadata_df[colnames(X), "batch_info"]
+generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
+palette1 <- generate_colour(10)
+palette1 <- brewer.pal(10, "Set3")
+col <- palette1[class_info]
+
+par(mfrow=c(1,2))
+
+## PCA
+plot(pca_coords[,1], pca_coords[,2], cex = 1.2, bg = col, pch = pch)
+
+## T-SNE
+plot(tsne_coords[,1], tsne_coords[,2],
+     cex = 1.2, bg = col, pch = pch,
+     main = "TSNE", xlab = "TSNE 1", ylab = "TSNE 2")
+
+## Original MDS
+plot(mds_coords[,1], mds_coords[,2],
+     cex = 1.2, bg = col, pch = pch,
+     main = "Non-metric MDS (k=50)", xlab = "MDS 1", ylab = "MDS 2")
+plot(mds_coords[,3], mds_coords[,2],
+     cex = 1.2, bg = col, pch = pch,
+     main = "Non-metric MDS (k=50)", xlab = "MDS 3", ylab = "MDS 2")
+mds_plot <- recordPlot()
+save_fig(mds_plot, "dump/rankdiff_mds-ALL.pdf",
+         width = 11, height = 6)
+
+## MDS -> TSNE
+plot(tsne_mds_coords[,1], tsne_mds_coords[,2],
+     cex = 1.2, bg = col, pch = pch,
+     main = "Non-metric MDS (k=50) - TSNE", xlab = "TSNE 1", ylab = "TSNE 2")
+tsne_plot <- recordPlot()
+save_fig(tsne_plot, "dump/tsne-ALL.pdf",
+         width = 11, height = 6)
+
+## MDS -> PCA
+plot(pca_mds_coords[,1], pca_mds_coords[,2], cex = 1.2, bg = col, pch = pch)
+
+## UMAP
+
+## 
+
+getNN <- function(pairwise_mat, flag) {
+  # Distance: Choose smallest distance
+  # Correlation: Choose largest correlation
+  if(flag == "dist") FUNC <- which.min
+  else FUNC <- which.max
+
+  # 1-NN for batch 1 samples
+  for(p1 in rownames(pairwise_mat)) {
+    p1_subtype <- as.character(d0_metadata[p1,"subtype"])
+    p2 <- names(FUNC(pairwise_mat[p1,]))
+    canberra_dist <- pairwise_mat[p1,p2]
+    p2_subtype <- as.character(d0_metadata[p2,"subtype"])
+
+    msg <- sprintf("%s (%s): %s (%s) - %.2f\n",
+                   p1, p1_subtype, p2, p2_subtype, canberra_dist)
+    cat(msg)
+
+    # dist_incr <- sort(pairwise_mat[p1,])
+    # names(dist_incr) <- metadata_df[names(dist_incr), "subtype"]
+    # cat(dist_incr)
+
+    # hist(pairwise_mat[p1,], breaks = 10, main = p1)
+    # abline(v = min(pairwise_mat[p1,]), col = "red")
+  }
+
+  cat("\n")
+
+  # 1-NN for batch 2 samples
+  for(p2 in colnames(pairwise_mat)) {
+    p2_subtype <- as.character(d0_metadata[p2,"subtype"])
+    p1 <- names(FUNC(pairwise_mat[,p2]))
+    canberra_dist <- pairwise_mat[p1,p2]
+    p1_subtype <- as.character(d0_metadata[p1,"subtype"])
+
+    msg <- sprintf("%s (%s): %s (%s) - %.2f\n",
+                   p1, p1_subtype, p2, p2_subtype, canberra_dist)
+    cat(msg)
+
+    # dist_incr <- sort(pairwise_mat[,p2])
+    # names(dist_incr) <- metadata_df[names(dist_incr), "subtype"]
+    # cat(dist_incr)
+
+    # hist(pairwise_mat[,p2], breaks = 10, main = p2)
+    # abline(v = min(pairwise_mat[,p2]), col = "red")
+  }
+}
+
 
 ### FEATURE SELECTION (CHI2) ###
 # Add class labels to each individual sample (row)
@@ -175,7 +383,7 @@ pheatmap(X, col = brewer.pal(9, "Blues"),
          show_colnames = F, show_rownames = F,
          annotation_col = subtype_df)
 heatmap <- recordPlot()
-save_fig(heatmap, "dump/heatmap-chi2.pdf")]
+save_fig(heatmap, "dump/heatmap-chi2.pdf")
 
 # ## Save only D0 patients for WEKA
 # # Add class labels to each individual sample (row)
@@ -231,51 +439,6 @@ save_fig(heatmap_b8b9, "dump/heatmap-dist_b8b9.pdf",
 # Subtype breakdown for pair of batches
 pair_metadata <- d0_metadata_ord[c(pid_1, pid_2),]
 table(pair_metadata$subtype, pair_metadata$batch_info)
-
-getNN <- function(pairwise_mat, flag) {
-  # Distance: Choose smallest distance
-  # Correlation: Choose largest correlation
-  if(flag == "dist") FUNC <- which.min
-  else FUNC <- which.max
-  
-  # 1-NN for batch 1 samples
-  for(p1 in rownames(pairwise_mat)) {
-    p1_subtype <- as.character(d0_metadata[p1,"subtype"])
-    
-    p2 <- names(FUNC(pairwise_mat[p1,]))
-    p2_subtype <- as.character(d0_metadata[p2,"subtype"])
-    
-    msg <- sprintf("%s (%s): %s (%s)\n", p1, p1_subtype, p2, p2_subtype)
-    cat(msg)
-    
-    # dist_incr <- sort(pairwise_mat[p1,])
-    # names(dist_incr) <- metadata_df[names(dist_incr), "subtype"]
-    # print(dist_incr)
-    
-    # hist(pairwise_mat[p1,], breaks = 10, main = p1)
-    # abline(v = min(pairwise_mat[p1,]), col = "red")
-  }
-  
-  cat("\n")
-  
-  # 1-NN for batch 1 samples
-  for(p2 in colnames(pairwise_mat)) {
-    p2_subtype <- as.character(d0_metadata[p2,"subtype"])
-    
-    p1 <- names(FUNC(pairwise_mat[,p2]))
-    p1_subtype <- as.character(d0_metadata[p1,"subtype"])
-    
-    msg <- sprintf("%s (%s): %s (%s)\n", p2, p2_subtype, p1, p1_subtype)
-    cat(msg)
-    
-    # dist_incr <- sort(pairwise_mat[,p2])
-    # names(dist_incr) <- metadata_df[names(dist_incr), "subtype"]
-    # print(dist_incr)
-    
-    # hist(pairwise_mat[,p2], breaks = 10, main = p2)
-    # abline(v = min(pairwise_mat[,p2]), col = "red")
-  }  
-}
 
 getNN(pair_dist, "dist")
 getNN(pair_cor, "cor")
