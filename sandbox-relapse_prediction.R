@@ -142,10 +142,12 @@ calcERM <- function(response_df, normal_df, labels_df) {
   )
   
   ### Concatenate all features ###
-  features_df <- cbind(erm1, erm1_ratio, erm2, erm2_ratio, erm3, erm3_ratio,
-                       d0_normal_proj, d8_normal_proj,
-                       l2norm_d0_d8, diff_l2norm, angle_d0_d8,
-                       angle_d0d8_normal, angle_d0_normal, angle_d8_normal)
+  features_df <- data.frame(
+    erm1, erm1_ratio, erm2, erm2_ratio, erm3, erm3_ratio,
+    d0_normal_proj, d8_normal_proj, l2norm_d0_d8,
+    diff_l2norm, angle_d0_d8, angle_d0d8_normal,
+    angle_d0_normal, angle_d8_normal
+  )
   return(features_df)
 }
 
@@ -190,6 +192,7 @@ plotPCA3DYeoh <- function(df1, metadata_df) {
   batch_colour <- batch_palette[batch_info]
   # Shape of all timepoints
   class_info <- metadata_df[colnames(df1), "class_info"]
+  print(levels(class_info))
   levels(class_info) <- 21:23
   timepoint_shape <- as.numeric(as.character(class_info))
   plotPCA3D(df1, batch_colour, timepoint_shape)
@@ -213,6 +216,29 @@ plotPCA3DYeoh1 <- function(df1, metadata_df) {
   col <- palette[class_info]
   
   plotPCA3D(df1, col, pch)
+}
+
+
+plotJitterYeoh <- function(X, metadata_df, n_pc = 10) {
+  pca_obj <- prcomp(t(X))
+  X_pca <- data.frame(pca_obj$x)
+  batch <- as.factor(metadata_df[rownames(X_pca),"batch_info"])
+  class <- as.factor(metadata_df[rownames(X_pca),"class_info"])
+  X_meta <- cbind(batch, class, X_pca[,1:n_pc])
+  X_long <- melt(X_meta, id = c("batch", "class"), variable.name="PC")
+  
+  ax_batch <- ggplot(X_long, aes(x=PC, y=value)) +
+    # geom_boxplot(aes(fill=batch), alpha=0.3, outlier.shape=NA) +
+    geom_point(aes(colour=batch), position=position_jitterdodge(),
+               size = 1, alpha = 1.0)
+  
+  ax_class <- ggplot(X_long, aes(x=PC, y=value)) +
+    # geom_boxplot(aes(fill=class), alpha=0.3, outlier.shape=NA) +
+    geom_point(aes(colour=class), position=position_jitterdodge(),
+               size = 1, alpha = 1.0)
+  
+  fig <- plot_grid(ax_batch, ax_class, nrow = 2)
+  return(fig)  
 }
 
 
@@ -450,3 +476,213 @@ for (subtype in suitable_subtypes) {
 ## # Check that there are D0 samples in batch 2
 ## table(metadata_df[colnames(sampled_qpsp),])
 ## ###
+
+
+# Visualisation -----------------------------------------------------------
+## Quantile normalistion
+quantile_yeoh <- normaliseQuantile(data_yeoh)
+
+## CS-Quantile
+colnames(data_yeoh)
+quantile_d0 <- normaliseQuantile(subset_yeoh[, 1:201])
+quantile_d8 <- normaliseQuantile(subset_yeoh[, 202:402])
+quantile_normal <- normaliseQuantile(subset_yeoh[, 403:405])
+csquantile_yeoh <- cbind(quantile_d0, quantile_d8, quantile_normal)
+
+plotPCA3DYeoh(data_yeoh, metadata_df)
+rgl.postscript("dump/pca_3d-sfl.pdf", "pdf")
+ggsave("dump/jitter-sfl.pdf",
+       plotJitterYeoh(data_yeoh, metadata_df),
+       width = 10, height = 6)
+
+plotPCA3DYeoh(csquantile_yeoh, metadata_df)
+rgl.postscript("dump/pca_3d-cs_quantile.pdf", "pdf")
+ggsave("dump/jitter-csquantile.pdf",
+       plotJitterYeoh(csquantile_yeoh, metadata_df),
+       width = 10, height = 6)
+
+plotPCA3DYeoh(quantile_yeoh, metadata_df)
+rgl.postscript("dump/pca_3d-quantile.pdf", "pdf")
+ggsave("dump/jitter-quantile.pdf",
+       plotJitterYeoh(quantile_yeoh, metadata_df),
+       width = 10, height = 6)
+
+plotPCA3DYeoh(gfs_yeoh, metadata_df)
+rgl.postscript("dump/pca_3d-gfs.pdf", "pdf")
+ggsave("dump/jitter-gfs.pdf",
+       plotJitterYeoh(gfs_yeoh, metadata_df),
+       width = 10, height = 6)
+
+plotPCA3DYeoh(qpsp_yeoh*100, metadata_df)
+rgl.postscript("dump/pca_3d-qpsp.pdf", "pdf")
+jitter_qpsp <- plotJitterYeoh(qpsp_yeoh, metadata_df)
+jitter_qpsp
+ggsave("dump/jitter-qpsp.pdf", jitter_qpsp,
+       width = 10, height = 6)
+
+# Global QPSP -------------------------------------------------------------
+# Discard PC2 and PC4
+pca_obj <- prcomp(t(qpsp_yeoh))
+eigenvalues <- (pca_obj$sdev)^2
+var_pc <- eigenvalues/sum(eigenvalues)
+## print(c("Variance:", var_pc))
+cum_var <- cumsum(var_pc)
+pc_ind <- which.max(cum_var > 0.70) # Identify PC theshold with >70% var
+print(c("PC: ", pc_ind))
+
+# PCA: Coordinates
+pc_batch <- c(2,4) # Batch affected PCs!
+selected_pc <- setdiff(1:10, pc_batch)
+pca_coord <- pca_obj$x[,selected_pc]
+
+# Response df and normal df
+n_idx <- nrow(pca_coord) - 3
+response_df <- pca_coord[1:n_idx,]
+normal_df <- pca_coord[-(1:n_idx),]
+print("Leukemia:")
+print(rownames(response_df))
+print("Normal:")
+print(rownames(normal_df))
+
+# Collate MRD results as well
+results <- calcERM(response_df, normal_df)
+
+SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/qpsp_pca-%s.tsv", subtype)
+SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/global_qpsp.tsv")
+write.table(results, SUBTYPE_WPATH, sep = "\t", quote = F)
+
+plotPrediction <- function(results, metadata_df) {
+  y <- as.factor(metadata_df[rownames(results),"label"])
+  features1 <- results[,c("erm1", "l2norm_d0_d8"), drop=F]
+  features2 <- results[, "angle_d0d8_normal", drop=F]
+  features1_y <- data.frame(features1, label = y)
+  features2_y <- data.frame(features2, label = y)
+  long_features1_y <- melt(features1_y, id="label", variable.name = "feature")
+  long_features2_y <- melt(features2_y, id="label", variable.name = "feature")
+
+  # Two different ways of rankings
+  features_rankdesc <- apply(-features1, 2, rank, ties.method="min")
+  features_percentdesc <- (features_rankdesc-1)/nrow(features1)
+  features_rankasc <- apply(features2, 2, rank, ties.method="min")
+  features_percentasc <- (features_rankasc-1)/nrow(features2)
+  features_percent <- cbind(features_percentdesc, features_percentasc)
+  
+  avg_percent <- rowMeans(features_percent)
+  avgpercent_y <- data.frame(p = avg_percent, label = y)
+  percent_y <- cbind(pid = rownames(features_percent),
+                     features_percent, avgpercent_y)
+  long_percent_y <- melt(percent_y, id = c("pid", "label"),
+                         variable.name = "feature")
+  print(head(long_percent_y))
+
+  # PLOT: FEATURES
+  jitter_features1 <- ggplot(long_features1_y) +
+    geom_point(aes(feature, value, colour = label),
+               position = position_jitterdodge()) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+  jitter_features2 <- ggplot(long_features2_y) +
+    geom_point(aes(feature, value, colour = label),
+               position = position_jitterdodge()) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+  
+  # PLOT: PROBABILITY
+  avg_percent <- ggplot(avgpercent_y) +
+    geom_point(aes(label, p, colour = label),
+               position = position_jitter()) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+  
+  parallel <- ggplot(long_percent_y) +
+    geom_line(aes(feature, value, colour = label, group = pid)) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+  
+  ax1 <- plot_grid(jitter_features1, jitter_features2,
+                   avg_percent, ncol = 3)
+  
+  fig <- plot_grid(ax1, parallel, nrow = 2) # rel_heights=c(3,2)
+  return(fig)
+}
+
+plotPrediction(results, metadata_df)
+
+globalqpsp_prediction <- plotPrediction(results, metadata_df)
+ggsave("dump/prediction-globalqpsp.pdf",
+       globalqpsp_prediction, width = 12, height = 7)
+
+# Subtype QPSP ------------------------------------------------------------
+# Plot jitter
+plotJitterYeoh <- function(X, metadata_df, n_pc = 10) {
+  pca_obj <- prcomp(t(X))
+  X_pca <- data.frame(pca_obj$x)
+  batch <- as.factor(metadata_df[rownames(X_pca),"batch_info"])
+  class <- as.factor(metadata_df[rownames(X_pca),"class_info"])
+  X_meta <- cbind(batch, class, X_pca[,1:n_pc])
+  X_long <- melt(X_meta, id = c("batch", "class"), variable.name="PC")
+  
+  ax_batch <- ggplot(X_long, aes(x=PC, y=value)) +
+    geom_boxplot(aes(fill=batch), alpha=0.3, outlier.shape=NA) +
+    geom_point(aes(colour=batch, pch=class), position=position_jitterdodge(),
+               size = 2, alpha = 1.0)
+  
+  ax_class <- ggplot(X_long, aes(x=PC, y=value)) +
+    geom_boxplot(aes(fill=class), alpha=0.3, outlier.shape=NA) +
+    geom_point(aes(colour=class), position=position_jitterdodge(),
+               size = 2, alpha = 1.0)
+  
+  fig <- plot_grid(ax_batch, ax_class, nrow = 2)
+  return(fig)  
+}
+
+all_subtypes <- levels(metadata_df$subtype)
+normal_pid <- paste0("N0", c(1,2,4))
+
+subtype <- all_subtypes[1]
+print(c("Subtype:", subtype))
+for (subtype in all_subtypes) {
+  print(c("Subtype:", subtype))
+  logi_idx <- rownames(metadata_df) %in% colnames(qpsp_yeoh) &
+    metadata_df$subtype == subtype
+  subtype_pid <- rownames(metadata_df)[logi_idx]
+  subset_pid <- c(subtype_pid, normal_pid)
+  
+  # Subtype and normal samples
+  subtype_qpsp <- qpsp_yeoh[,subset_pid]
+  print(subtype_qpsp[1:5,1:5])
+  
+#   jitter_subtype <- plotJitterYeoh(subtype_qpsp, metadata_df)
+#   JITTER_WPATH <- sprintf("dump/jitter-%s.pdf", subtype)
+#   ggsave(JITTER_WPATH, jitter_subtype, width = 12, height = 6)
+#   jitter_subtype # Identify PCs with batch effects!
+  
+  pca_obj <- prcomp(t(subtype_qpsp))
+  eigenvalues <- (pca_obj$sdev)^2
+  var_pc <- eigenvalues/sum(eigenvalues)
+  ## print(c("Variance:", var_pc))
+  cum_var <- cumsum(var_pc)
+  pc_ind <- which.max(cum_var > 0.70) # Identify PC theshold with >70% var
+  print(c("PC: ", pc_ind))
+  
+  # PCA: Coordinates
+  pc_batch <- c(1) # Batch affected PCs!
+  selected_pc <- setdiff(1:10, pc_batch)
+  print(selected_pc)
+  pca_coord <- pca_obj$x[,selected_pc]
+  
+  # Response df and normal df
+  n_idx <- nrow(pca_coord) - 3
+  response_df <- pca_coord[1:n_idx,]
+  normal_df <- pca_coord[-(1:n_idx),]
+  print("Leukemia:")
+  print(rownames(response_df))
+  print("Normal:")
+  print(rownames(normal_df))
+  
+  # Collate MRD results as well
+  results <- calcERM(response_df, normal_df)
+  SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/qpsp-%s.tsv", subtype)
+  write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
+  
+  # Plot
+  qpsp_prediction <- plotPrediction(results, metadata_df)
+  PREDICTION_WPATH <- sprintf("dump/qpsp_prediction-%s.pdf", subtype)
+  ggsave(PREDICTION_WPATH, qpsp_prediction, width = 12, height = 7)
+}

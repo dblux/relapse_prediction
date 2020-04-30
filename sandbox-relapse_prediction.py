@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
 
-from sklearn import tree
+from sklearn import trees
 from sklearn.naive_bayes import GaussianNB
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
@@ -183,7 +183,7 @@ likelihood_train, likelihood_test = train_test_split(product_likelihood_y,
 
 # X_scaled_y = pd.concat([X_scaled,y], axis=1)
 # print(X_scaled_y)
-
+s
 #%% STRIP PLOT: 1-joint
 
 fig, (ax1, ax2) = plt.subplots(2, 1)
@@ -195,7 +195,7 @@ plt.tight_layout()
 plt.show()
 
 PROBA_WPATH = "dump/predict_proba-{}.pdf".format(SUBTYPE)
-fig.savefig(PROBA_WPATH)
+# fig.savefig(PROBA_WPATH)
 
 #%% STRIP PLOT: Feature likelihoods
 
@@ -216,11 +216,11 @@ ax.legend_.remove()
 plt.tight_layout()
 
 LIKELIHOOD_WPATH = "dump/feat_likelihood-{}.pdf".format(SUBTYPE)
-plt.savefig(LIKELIHOOD_WPATH)
+# plt.savefig(LIKELIHOOD_WPATH)
 
 #%% ROC curve from proba
-fpr, tpr, _ = roc_curve(product_likelihood_y.iloc[:,2],
-                        product_likelihood_y.iloc[:,1],
+fpr, tpr, _ = roc_curve(likelihood_test.iloc[:,2],
+                        likelihood_test.iloc[:,1],
                         drop_intermediate=False)
 AUC = auc(fpr, tpr)
 
@@ -235,7 +235,7 @@ ax.legend(loc="lower right")
 plt.tight_layout()
 plt.show()
 
-ROC_WPATH = "dump/roc-{}.pdf".format(SUBTYPE)
+ROC_WPATH = "dump/roc-{}.pdf".format(SUBTYPE)s
 fig.savefig(ROC_WPATH)
 
 #%% PCA Visualisaton of likelihood features
