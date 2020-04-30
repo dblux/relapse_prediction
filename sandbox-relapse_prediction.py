@@ -32,13 +32,13 @@ MRD_RPATH = "data/GSE67684/processed/metadata/metadata-label_mrd_subtype.tsv"
 mrd_df = pd.read_csv(MRD_RPATH, sep="\t")
 
 #%% IMPORT DATA
-features_rpath = rpath_list[3]
+features_rpath = rpath_list[5]
 raw_data = pd.read_csv(features_rpath, sep="\t")
 SUBTYPE = re.search("pca_bcm_qpsp-(.+?).tsv", features_rpath).groups()[0]
 print(SUBTYPE)
 
 # Feature selection
-features = ["erm1", "l2norm_d0_d8", "d0_normal_proj", "angle_d0_d8"]
+features = ["erm1", "l2norm_d0_d8", "angle_d0d8_normal"]
 X = raw_data.loc[:,features]
 y = metadata_df.loc[X.index, "label"]
 y_label = y.astype("category")
@@ -68,6 +68,32 @@ X_scaled_train, X_scaled_test, y_train, y_test = train_test_split(
 print("Size of training set:", y_train.shape)
 print("Size of test set:", y_test.shape)
 
+#%% Calculate percentage of samples with bigger score
+# Feature angle_d0d8_normal has to be ranked the OPPOSITE way!
+X_subset = X.drop("angle_d0d8_normal", axis=1)
+X_rank = X_subset.rank(axis=0, method="min", ascending=False)
+X_percent = (X_rank-1)/X.shape[0]
+
+X_rankasc = X.angle_d0d8_normal.rank()
+X_percentasc = (X_rankasc-1)/X.shape[0]
+
+X_allpercent = pd.concat([X_percent, X_percentasc], axis=1)
+X_avgpercent = X_allpercent.mean(axis=1) # Mean of all p
+Xpercent_y = pd.concat([X_allpercent, X_avgpercent, y_label], axis=1)
+Xpercent_y.rename(columns={0: "avg_percent"}, inplace=True)
+print(Xpercent_y)
+
+y_col = y_label.cat.rename_categories(["steelblue", "red"])
+
+end = Xpercent_y.shape[1]-1
+for i in range(Xpercent_y.shape[0]):
+    plt.plot(Xpercent_y.iloc[i,0:end], color=y_col[i])
+
+plt.xticks(rotation=15)
+plt.tight_layout()
+PREDICTION_WPATH = "dump/parallel_prediction-{}.pdf".format(SUBTYPE)
+plt.savefig(PREDICTION_WPATH)
+
 #%% PCA Visualisaton of features
 
 # pca = PCA(n_components=3)
@@ -94,13 +120,13 @@ print("Size of test set:", y_test.shape)
 
 #%% STRIP PLOT: Unnormalised
 
-# fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(9,7))
-# sns.stripplot(data=X_y, x="erm1", y="label", ax=ax1)
-# sns.stripplot(data=X_y, x="l2norm_d0_d8", y="label", ax=ax2)
-# sns.stripplot(data=X_y, x="d0_normal_proj", y="label", ax=ax3)
-# sns.stripplot(data=X_y, x="angle_d0_d8", y="label", ax=ax4)
-# plt.tight_layout()
-# plt.show()
+ fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(9,7))
+ sns.stripplot(data=X_y, x="erm1", y="label", ax=ax1)
+ sns.stripplot(data=X_y, x="l2norm_d0_d8", y="label", ax=ax2)
+ sns.stripplot(data=X_y, x="d0_normal_proj", y="label", ax=ax3)
+ sns.stripplot(data=X_y, x="angle_d0_d8", y="label", ax=ax4)
+ plt.tight_layout()
+ plt.show()
 
 # RAW_WPATH = "dump/raw-{}.pdf".format(SUBTYPE)
 # fig.savefig(RAW_WPATH)
