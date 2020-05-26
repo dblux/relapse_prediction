@@ -7,6 +7,7 @@ library(cowplot)
 library(rgl)
 library(RColorBrewer)
 library(pheatmap)
+library(UpSetR)
 # library(Rtsne)
 # library(dendextend)
 
@@ -14,8 +15,6 @@ library(pheatmap)
 source("../functions.R")
 source("bin/bcm.R")
 
-# theme_set(theme_dark())
-# theme_set(theme_gray())
 theme_set(theme_cowplot())
 
 # FUNCTIONS ---------------------------------------------------------------
@@ -63,7 +62,7 @@ selectFeatures <- function(df1, metadata_df,
 
 # All dataframes have samples in rows and features in columns
 # D0 centroid used to define D0-Normal vector
-calcERM <- function(response_df, normal_df, labels_df) {
+calcERM <- function(response_df, normal_df) {
   # Split response df into D0 and D8 df
   n <- nrow(response_df)/2
   d0_df <- response_df[1:n,]
@@ -218,7 +217,6 @@ plotPCA3DYeoh1 <- function(df1, metadata_df) {
   plotPCA3D(df1, col, pch)
 }
 
-
 plotJitterYeoh <- function(X, metadata_df, n_pc = 10) {
   pca_obj <- prcomp(t(X))
   X_pca <- data.frame(pca_obj$x)
@@ -241,7 +239,6 @@ plotJitterYeoh <- function(X, metadata_df, n_pc = 10) {
   return(fig)  
 }
 
-
 # IMPORT DATA -------------------------------------------------------------
 ## Subset of original data
 # Removed outliers, patients with timepoints from different batches and batch 5
@@ -259,8 +256,9 @@ metadata_df <- read.table(METADATA_RPATH, sep = "\t")
 # yeoh_label <- read.table(LABEL_RPATH, sep = "\t", header = T, row.names = 1)
 
 # SCALE->REMOVE->FILTER->LOG
-scaled_yeoh <- removeProbesets(normaliseMeanScaling(subset_yeoh))
-data_yeoh <- log2_transform(filterProbesets(scaled_yeoh, 0.7, metadata_df))
+scaled_yeoh <- normaliseMeanScaling(subset_yeoh)
+subset_yeoh <- removeProbesets(scaled_yeoh)
+data_yeoh <- log2_transform(filterProbesets(subset_yeoh, 0.7, metadata_df))
 
 # # Filter out all rows with zero values
 # logi_idx <- rowSums(data_yeoh == 0) == 0
@@ -305,20 +303,20 @@ table(metadata_df$subtype, metadata_df$batch_info)
 for (subtype in suitable_subtypes) {
   print(c("Subtype:", subtype))
   normal_pid <- paste0("N0", c(1,2,4))
-
+  
   logi_idx <- rownames(metadata_df) %in% colnames(qpsp_yeoh) &
     metadata_df$subtype == subtype
   subtype_pid <- rownames(metadata_df)[logi_idx]
   subset_pid <- c(subtype_pid, normal_pid)
-
+  
   # Subtype and normal samples
   subtype_qpsp <- qpsp_yeoh[,subset_pid]
   print(subtype_qpsp[1:5,1:5])
-
+  
   # BCM on QPSP transformed data
   bcm_qpsp <- correctGlobalBCM(subtype_qpsp, metadata_df)
   print(bcm_qpsp[1:5,1:5])
-
+  
   # PCA
   pca_obj <- prcomp(t(bcm_qpsp))
   # PCA: Eigenvalues
@@ -329,7 +327,7 @@ for (subtype in suitable_subtypes) {
   # Identify PC that has just above 70% variance
   pc_ind <- which.max(cum_var > 0.70)
   print(c("PC: ", pc_ind))
-
+  
   # PCA: Coordinates
   pca_coord <- pca_obj$x[,1:pc_ind]
   # Response df and normal df
@@ -340,7 +338,7 @@ for (subtype in suitable_subtypes) {
   print(rownames(response_df))
   print("Normal:")
   print(rownames(normal_df))
-
+  
   # Collate MRD results as well
   results_df <- calcERM(response_df, normal_df)
   SUBTYPE_WPATH <- sprintf("temp/pca_bcm_qpsp/pca_bcm_qpsp-%s.tsv", subtype)
@@ -559,7 +557,7 @@ plotPrediction <- function(results, metadata_df) {
   features2_y <- data.frame(features2, label = y)
   long_features1_y <- melt(features1_y, id="label", variable.name = "feature")
   long_features2_y <- melt(features2_y, id="label", variable.name = "feature")
-
+  
   # Two different ways of rankings
   features_rankdesc <- apply(-features1, 2, rank, ties.method="min")
   features_percentdesc <- (features_rankdesc-1)/nrow(features1)
@@ -573,40 +571,80 @@ plotPrediction <- function(results, metadata_df) {
                      features_percent, avgpercent_y)
   long_percent_y <- melt(percent_y, id = c("pid", "label"),
                          variable.name = "feature")
-  print(head(long_percent_y))
-
+  # print(head(long_percent_y))
+  
   # PLOT: FEATURES
   jitter_features1 <- ggplot(long_features1_y) +
     geom_point(aes(feature, value, colour = label),
-               position = position_jitterdodge()) +
-    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+               position = position_jitterdodge(), cex = 3,
+               show.legend = F) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3")) +
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_text(angle = 10, vjust = 0.5))
+  
   jitter_features2 <- ggplot(long_features2_y) +
     geom_point(aes(feature, value, colour = label),
-               position = position_jitterdodge()) +
-    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+               position = position_jitterdodge(), cex = 3,
+               show.legend = F) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3")) +
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_text(angle = 10, vjust = 0.5))
   
   # PLOT: PROBABILITY
   avg_percent <- ggplot(avgpercent_y) +
     geom_point(aes(label, p, colour = label),
-               position = position_jitter()) +
+               position = position_jitter(), cex = 3,
+               show.legend = F) +
     scale_color_manual(values = c("darkolivegreen3", "tomato3"))
   
+  emp_cdf <- ggplot(avgpercent_y) +
+    stat_ecdf(aes(x = p, colour = label),
+               position = position_jitter(), cex = 2,
+               show.legend = F) +
+    scale_color_manual(values = c("darkolivegreen3", "tomato3"))
+  
+  # Calculating relative risk
+  sort_avgp <- avgpercent_y[order(avgpercent_y$p),]
+  sort_avgp$label <- as.numeric(as.character(sort_avgp$label))
+  sort_avgp$total_le <- rank(sort_avgp$p, ties.method = "max")
+  sort_avgp$total_g <- nrow(sort_avgp) - sort_avgp$total_le
+  sort_avgp$relapse_le <- cumsum(sort_avgp$label)
+  sort_avgp$relapse_g <- sum(sort_avgp$label) - sort_avgp$relapse_le
+  sort_avgp <- within(sort_avgp,
+                      relative_risk <-
+                        (relapse_le/total_le)/(relapse_g/total_g))
+  sort_avgp <- within(sort_avgp,
+                      odds_ratio <-
+                        (relapse_le/(total_le-relapse_le))/
+                           (relapse_g/(total_g-relapse_g)))
+  print(sort_avgp)
+  rel_risk <- ggplot(sort_avgp) +
+    geom_step(aes(p, relative_risk, colour = "RR"), direction = "hv") + 
+    geom_step(aes(p, odds_ratio, colour = "OR"), direction = "hv") +
+    scale_color_manual("",
+                       breaks = c("RR", "OR"),
+                       values = c("RR" = "orange", "OR" = "steelblue3")) +
+    theme(axis.title.y = element_blank())
+
   parallel <- ggplot(long_percent_y) +
-    geom_line(aes(feature, value, colour = label, group = pid)) +
+    geom_line(aes(feature, value, colour = label, group = pid),
+              show.legend = F) +
     scale_color_manual(values = c("darkolivegreen3", "tomato3"))
   
   ax1 <- plot_grid(jitter_features1, jitter_features2,
-                   avg_percent, ncol = 3)
+                   avg_percent, emp_cdf, rel_risk,
+                   ncol = 5, rel_widths = c(.2, .15, .15, .25, .25))
   
-  fig <- plot_grid(ax1, parallel, nrow = 2) # rel_heights=c(3,2)
+  fig <- plot_grid(ax1, parallel, nrow = 2) # rel_heights=c(4,5)
   return(fig)
 }
+
 
 plotPrediction(results, metadata_df)
 
 globalqpsp_prediction <- plotPrediction(results, metadata_df)
 ggsave("dump/prediction-globalqpsp.pdf",
-       globalqpsp_prediction, width = 12, height = 7)
+       globalqpsp_prediction, width = 12, height = 6)
 
 # Subtype QPSP ------------------------------------------------------------
 # Plot jitter
@@ -616,7 +654,7 @@ plotJitterYeoh <- function(X, metadata_df, n_pc = 10) {
   batch <- as.factor(metadata_df[rownames(X_pca),"batch_info"])
   class <- as.factor(metadata_df[rownames(X_pca),"class_info"])
   X_meta <- cbind(batch, class, X_pca[,1:n_pc])
-  X_long <- melt(X_meta, id = c("batch", "class"), variable.name="PC")
+  X_long <- melt(X_meta, ids = c("batch", "class"), variable.name="PC")
   
   ax_batch <- ggplot(X_long, aes(x=PC, y=value)) +
     geom_boxplot(aes(fill=batch), alpha=0.3, outlier.shape=NA) +
@@ -632,12 +670,14 @@ plotJitterYeoh <- function(X, metadata_df, n_pc = 10) {
   return(fig)  
 }
 
-all_subtypes <- levels(metadata_df$subtype)
 normal_pid <- paste0("N0", c(1,2,4))
-
-subtype <- all_subtypes[1]
-print(c("Subtype:", subtype))
-for (subtype in all_subtypes) {
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+# List of PCs to remove for each subtype
+remove_pc <- list(1, c(1,2), numeric(), c(2,4), c(1,2), c(2,3), 2)
+names(remove_pc) <- subtypes
+print(remove_pc)
+for (subtype in names(remove_pc)) {
   print(c("Subtype:", subtype))
   logi_idx <- rownames(metadata_df) %in% colnames(qpsp_yeoh) &
     metadata_df$subtype == subtype
@@ -646,12 +686,12 @@ for (subtype in all_subtypes) {
   
   # Subtype and normal samples
   subtype_qpsp <- qpsp_yeoh[,subset_pid]
-  print(subtype_qpsp[1:5,1:5])
+  # print(subtype_qpsp[1:5,1:5])
   
-#   jitter_subtype <- plotJitterYeoh(subtype_qpsp, metadata_df)
-#   JITTER_WPATH <- sprintf("dump/jitter-%s.pdf", subtype)
-#   ggsave(JITTER_WPATH, jitter_subtype, width = 12, height = 6)
-#   jitter_subtype # Identify PCs with batch effects!
+  #   jitter_subtype <- plotJitterYeoh(subtype_qpsp, metadata_df)
+  #   JITTER_WPATH <- sprintf("dump/jitter-%s.pdf", subtype)
+  #   ggsave(JITTER_WPATH, jitter_subtype, width = 12, height = 6)
+  #   jitter_subtype # Identify PCs with batch effects!
   
   pca_obj <- prcomp(t(subtype_qpsp))
   eigenvalues <- (pca_obj$sdev)^2
@@ -659,30 +699,638 @@ for (subtype in all_subtypes) {
   ## print(c("Variance:", var_pc))
   cum_var <- cumsum(var_pc)
   pc_ind <- which.max(cum_var > 0.70) # Identify PC theshold with >70% var
-  print(c("PC: ", pc_ind))
+  # print(c("PC: ", pc_ind))
   
   # PCA: Coordinates
-  pc_batch <- c(1) # Batch affected PCs!
+  pc_batch <- remove_pc[[subtype]] # Batch affected PCs!
+  print(pc_batch)
   selected_pc <- setdiff(1:10, pc_batch)
-  print(selected_pc)
   pca_coord <- pca_obj$x[,selected_pc]
   
   # Response df and normal df
   n_idx <- nrow(pca_coord) - 3
   response_df <- pca_coord[1:n_idx,]
   normal_df <- pca_coord[-(1:n_idx),]
-  print("Leukemia:")
-  print(rownames(response_df))
-  print("Normal:")
-  print(rownames(normal_df))
   
-  # Collate MRD results as well
+  # # Collate MRD results as well
   results <- calcERM(response_df, normal_df)
-  SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/qpsp-%s.tsv", subtype)
-  write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
+  # SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/qpsp-%s.tsv", subtype)
+  # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
   
   # Plot
   qpsp_prediction <- plotPrediction(results, metadata_df)
-  PREDICTION_WPATH <- sprintf("dump/qpsp_prediction-%s.pdf", subtype)
+  PREDICTION_WPATH <- sprintf("dump/remove_batchpc-%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, qpsp_prediction, width = 12, height = 7)
 }
+
+# Feature selection (Wilson) ----------------------------------------------
+#' Select top percentage genes with highest var
+selectTopGenes <- function(X, f, percent) {
+  list_group_df <- split.default(X, f, drop = F)
+  group_means <- sapply(list_group_df, rowMeans)
+  # Calculate group means for every gene and var of means
+  group_means_var <- apply(group_means, 1, var)
+  group_var_rank <- rank(-group_means_var) # rank desc
+  top_group_genes <- names(group_var_rank)[
+    group_var_rank < percent*length(group_var_rank)]
+  return(top_group_genes)
+}
+
+# Only D0 samples
+pid_d0 <- rownames(metadata_df)[metadata_df$class_info == "D0"]
+pid_idx <- intersect(pid_d0, colnames(data_yeoh))
+d0_yeoh <- data_yeoh[,pid_idx]
+
+# Factor to split data
+batch <- as.factor(metadata_df[colnames(data_yeoh), "batch_info"])
+class <- as.factor(metadata_df[colnames(data_yeoh), "class_info"])
+label <- as.factor(metadata_df[colnames(data_yeoh), "label"])
+subtype <- as.factor(metadata_df[colnames(d0_yeoh), "label"]) # split D0 data only
+
+print(table(batch, class))
+
+PERCENT <- 0.1
+batch_topgenes <- selectTopGenes(data_yeoh, batch, PERCENT)
+class_topgenes <- selectTopGenes(data_yeoh, class, PERCENT)
+label_topgenes <- selectTopGenes(data_yeoh, label, PERCENT)
+subtype_topgenes <- selectTopGenes(d0_yeoh, subtype, PERCENT)
+
+# No grouping of samples
+gene_var <- apply(data_yeoh, 1, var)
+var_rank <- rank(-gene_var) # rank desc
+topgenes <- names(var_rank)[var_rank < PERCENT*length(var_rank)]
+
+wilson_batch_genes <- setdiff(intersect(batch_topgenes, topgenes),
+                              class_topgenes)
+wilson_class_genes <- setdiff(intersect(class_topgenes, topgenes),
+                              batch_topgenes)
+wilson_label_genes <- setdiff(intersect(label_topgenes, topgenes),
+                              batch_topgenes)
+wilson_subtype_genes <- setdiff(intersect(subtype_topgenes, topgenes),
+                                batch_topgenes)
+
+class_yeoh <- data_yeoh[wilson_class_genes,]
+batch_yeoh <- data_yeoh[wilson_batch_genes,]
+label_yeoh <- data_yeoh[wilson_label_genes,]
+subtype_yeoh <- data_yeoh[wilson_subtype_genes,]
+
+## EVALUATION
+subset_metadata <- metadata_df[,c("batch_info", "class_info")]
+pheatmap(class_yeoh, col = brewer.pal(9, "Blues"),
+         legend = T, border_color = NA, scale = "none",
+         cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+         show_colnames = F, show_rownames = F,
+         annotation_col = subset_metadata)
+heatmap <- recordPlot()
+save_fig(heatmap, "dump/heatmap-class.pdf",
+         width = 6, height = 6)
+
+pheatmap(batch_yeoh, col = brewer.pal(9, "Blues"),
+         legend = T, border_color = NA, scale = "none",
+         cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+         show_colnames = F, show_rownames = F,
+         annotation_col = subset_metadata)
+heatmap <- recordPlot()
+save_fig(heatmap, "dump/heatmap-batch.pdf",
+         width = 6, height = 6)
+
+# Label genes
+# subset_metadata <- metadata_df[,c("batch_info","class_info","label")]
+pheatmap(label_yeoh, col = brewer.pal(9, "Blues"),
+         legend = T, border_color = NA, scale = "none",
+         cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+         show_colnames = F, show_rownames = F,
+         annotation_col = metadata_df)
+heatmap <- recordPlot()
+save_fig(heatmap, "dump/heatmap-label.pdf",
+         width = 6, height = 6)
+
+# Sort according to class info and subtype
+subset_metadata <- metadata_df[colnames(subtype_yeoh),]
+ord_pid <- rownames(subset_metadata)[order(subset_metadata$class_info,
+                                           subset_metadata$subtype)]
+ordered_subtype_yeoh <- subtype_yeoh[,ord_pid]
+
+# Clustering using pearson correlation
+# Pairwise correlation between rows (genes)
+rows_cor <- cor(t(ordered_subtype_yeoh),
+                use = "pairwise.complete.obs",
+                method = "pearson")
+
+pheatmap(ordered_subtype_yeoh, col = brewer.pal(9, "Blues"),
+         legend = T, border_color = NA, scale = "none",
+         cluster_rows = T, cluster_cols = F,
+         show_colnames = F, show_rownames = F,
+         clustering_distance_rows = as.dist(1 - rows_cor),
+         annotation_col = metadata_df)
+heatmap <- recordPlot()
+save_fig(heatmap, "dump/heatmap-subtype_pearson.pdf",
+         width = 6, height = 6)
+
+## Evaluate batch effects
+ggsave("dump/jitter-class.pdf",
+       plotJitterYeoh(class_yeoh, metadata_df),
+       width = 10, height = 6)
+ggsave("dump/jitter-batch.pdf",
+       plotJitterYeoh(batch_yeoh, metadata_df),
+       width = 10, height = 6)
+
+# Calculate features (without PCA)
+# Class genes
+idx <- 1:(ncol(class_yeoh)-3)
+classgenes_response <- t(class_yeoh)[idx,]
+classgenes_normal <- t(class_yeoh)[-idx,]
+features1 <- calcERM(classgenes_response, classgenes_normal)
+global_prediction_class <- plotPrediction(features1, metadata_df)
+ggsave("dump/prediction-global_classgenes.pdf", global_prediction_class,
+       width = 8, height = 6)
+
+# Batch genes
+idx <- 1:(ncol(batch_yeoh)-3)
+batchgenes_response <- t(batch_yeoh)[idx,]
+batchgenes_normal <- t(batch_yeoh)[-idx,]
+features2 <- calcERM(batchgenes_response, batchgenes_normal)
+global_prediction_batch <- plotPrediction(features2, metadata_df)
+ggsave("dump/prediction-global_batchgenes.pdf", global_prediction_batch,
+       width = 8, height = 6)
+
+# Label genes
+idx <- 1:(ncol(label_yeoh)-3)
+labelgenes_response <- t(label_yeoh)[idx,]
+labelgenes_normal <- t(label_yeoh)[-idx,]
+features2 <- calcERM(labelgenes_response, labelgenes_normal)
+global_prediction_label <- plotPrediction(features2, metadata_df)
+ggsave("dump/prediction-global_labelgenes.pdf", global_prediction_label,
+       width = 8, height = 6)
+
+# Subtype genes
+idx <- 1:(ncol(subtype_yeoh)-3)
+subtypegenes_response <- t(subtype_yeoh)[idx,]
+subtypegenes_normal <- t(subtype_yeoh)[-idx,]
+features2 <- calcERM(subtypegenes_response, subtypegenes_normal)
+global_prediction_subtype <- plotPrediction(features2, metadata_df)
+ggsave("dump/prediction-global_subtypegenes.pdf", global_prediction_subtype,
+       width = 8, height = 6)
+
+## Subtype specific
+normal_pid <- paste0("N0", c(1,2,4))
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+X <- subtype_yeoh
+for (subtype in subtypes) {
+  print(c("Subtype:", subtype))
+  logi_idx <- rownames(metadata_df) %in% colnames(X) &
+    metadata_df$subtype == subtype
+  subtype_pid <- rownames(metadata_df)[logi_idx]
+  subset_pid <- c(subtype_pid, normal_pid)
+  
+  # Subtype and normal samples
+  subset_yeoh <- X[,subset_pid]
+  idx <- 1:(ncol(subset_yeoh)-3)
+  response <- t(subset_yeoh)[idx,]
+  normal <- t(subset_yeoh)[-idx,]
+  print(colnames(subset_yeoh))
+  print(rownames(response))
+  
+  # # Collate MRD results as well
+  results <- calcERM(response, normal)
+  # SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/qpsp-%s.tsv", subtype)
+  # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
+  
+  # Plot
+  prediction_parallel <- plotPrediction(results, metadata_df)
+  PREDICTION_WPATH <- sprintf("dump/prediction-subtypegenes_%s.pdf", subtype)
+  ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
+}
+
+# Subtype specific (PCA) to pick up genes with relevant
+# signal (hopefully higher var genes are with signal)
+normal_pid <- paste0("N0", c(1,2,4))
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+X <- subtype_yeoh
+for (subtype in subtypes) {
+  print(c("Subtype:", subtype))
+  logi_idx <- rownames(metadata_df) %in% colnames(X) &
+    metadata_df$subtype == subtype
+  subtype_pid <- rownames(metadata_df)[logi_idx]
+  subset_pid <- c(subtype_pid, normal_pid)
+  
+  # Subtype and normal samples
+  subset_yeoh <- X[,subset_pid]
+  JITTER_WPATH <- sprintf("dump/jitter_subtypegenes-%s.pdf", subtype)
+  ggsave(JITTER_WPATH,
+         plotJitterYeoh(subset_yeoh, metadata_df),
+         width = 10, height = 6)
+  
+  pca_obj <- prcomp(t(subset_yeoh))
+  eigenvalues <- (pca_obj$sdev)^2
+  var_pc <- eigenvalues/sum(eigenvalues)
+  ## print(c("Variance:", var_pc))
+  cum_var <- cumsum(var_pc)
+  # pc_ind <- which.max(cum_var > 0.70) # Identify PC theshold with >70% var
+  
+  pca_coord <- pca_obj$x[,1:3]
+  
+  # Response df and normal df
+  n_idx <- nrow(pca_coord) - 3
+  response_df <- pca_coord[1:n_idx,]
+  normal_df <- pca_coord[-(1:n_idx),]
+  
+  # # Collate MRD results as well
+  results <- calcERM(response_df, normal_df)
+  # SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/qpsp-%s.tsv", subtype)
+  # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
+  
+  # Plot
+  prediction <- plotPrediction(results, metadata_df)
+  PREDICTION_WPATH <- sprintf("dump/prediction-subtypegenes_pca_%s.pdf", subtype)
+  ggsave(PREDICTION_WPATH, prediction, width = 12, height = 7)
+}
+
+
+GENES_DIR <- "data/yeoh_2002/README/chi_square_probesets"
+filenames <- list.files(GENES_DIR, full.names = T)
+
+# Feature selection -------------------------------------------------------
+
+## Batch genes
+# Only D0 samples
+pid_d0 <- rownames(metadata_df)[metadata_df$class_info == "D0"]
+pid_telaml1 <- rownames(metadata_df)[metadata_df$subtype == "TEL-AML1"]
+pid_remission <- rownames(metadata_df)[metadata_df$label == 0]
+
+# Recursive intersect
+pid_idx <- intersect(
+  intersect(pid_remission, intersect(pid_d0, pid_telaml1)),
+  colnames(data_yeoh)
+)
+d0_telaml1 <- data_yeoh[,pid_idx]
+d0_batch <- metadata_df[colnames(d0_telaml1), "batch_info"]
+
+##### TRIAL PLOT
+batches_telaml1 <- split.default(d0_telaml1, d0_batch, drop = F) # Split by subtype
+
+par(mfrow=c(4,2), mar=c(2,2,2,1))
+for (i in 1:8) {
+  X <- as.numeric(batches_telaml1[[i]][1,])
+  stripchart(X, pch = 1, cex = 2)
+}
+### END ###
+
+d0_telaml1_t <- t(d0_telaml1)
+#' @param X matrix with samples as rows and features as columns
+calcBatchANOVA <- function(X, batch, method = "welch") {
+  .featureANOVA <- function(vec, d0_batch, method) {
+    X <- data.frame(gene = vec,
+                    batch = as.factor(d0_batch))
+    
+    if (method == "welch") return(oneway.test(gene~batch, X)$p.value)
+    else if (method == "aov") return(unname(unlist(summary(aov(gene~batch, data = X)))[9]))
+    else if (method == "kruskal") return(kruskal.test(gene~batch, X)$p.value)
+    else stop("option not available for argument: method")
+  }
+  
+  pvalue <- sapply(data.frame(X), .featureANOVA, batch, method)
+  names(pvalue) <- substring(names(pvalue), 2)
+  n_nan <- sum(sapply(pvalue, is.na))
+  print(c("No. of NaNs =", n_nan))
+  return(pvalue)
+}
+
+aov_pvalue <- calcBatchANOVA(d0_telaml1_t, d0_batch, method = "aov")
+welch_pvalue <- calcBatchANOVA(d0_telaml1_t, d0_batch, method = "welch")
+kruskal_pvalue <- calcBatchANOVA(d0_telaml1_t, d0_batch, method = "kruskal")
+
+hist(aov_pvalue, breaks = 20)
+hist(welch_pvalue, breaks = 20)
+hist(kruskal_pvalue, breaks = 20)
+plot(aov_pvalue, welch_pvalue)
+plot(aov_pvalue, kruskal_pvalue)
+
+hist_pvalue <- recordPlot()
+save_fig(hist_pvalue, "dump/hist_pvalue-batch.pdf",
+         width = 6, height = 6)
+
+N <- 500
+batch_genes <- names(head(sort(aov_pvalue), N))
+# OPTION 2: Selecting by pvalue threshold
+batch_genes <- names(aov_pvalue)[aov_pvalue < 0.05 & !is.na(aov_pvalue)]
+welch_genes <- names(welch_pvalue)[welch_pvalue < 0.05 & !is.na(welch_pvalue)]
+kruskal_genes <- names(kruskal_pvalue)[kruskal_pvalue < 0.05 & !is.na(kruskal_pvalue)]
+length(batch_genes)
+
+X_batch <- data_yeoh[batch_genes,]
+pheatmap(X_batch, col = brewer.pal(9, "Blues"),
+         legend = T, border_color = "black", scale = "none",
+         cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+         show_colnames = F, show_rownames = F,
+         annotation_col = metadata_df)
+heatmap_batch <- recordPlot()
+save_fig(heatmap_batch, "dump/heatmap-batch_2565.pdf",
+         width = 10, height = 10)
+
+table(metadata_df$batch_info, metadata_df$subtype)
+
+list_batch_genes <- list(anova = batch_genes, welch = welch_genes,
+                         kruskal = kruskal_genes)
+
+upset(fromList(list_batch_genes),
+      nsets = length(list_selected),
+      nintersects = NA,
+      order.by = "freq")
+upset_plot <- recordPlot()
+upset_plot
+save_fig(upset_plot, "dump/upset-batch_genes.pdf",
+         width = 8, height = 8)
+
+## Label genes
+pid_d8 <- rownames(metadata_df)[metadata_df$class_info == "D8"]
+pid_idx <- intersect(pid_d8, colnames(data_yeoh))
+d8_yeoh <- data_yeoh[,pid_idx]
+
+subtype_factor1 <- as.factor(metadata_df[colnames(d8_yeoh), "subtype"])
+subtypes_d8 <- split.default(d8_yeoh, subtype_factor1, drop = F) # Split by subtype
+
+## PREDICTION (LABEL)
+X <- data_yeoh
+normal_pid <- paste0("N0", c(1,2,4))
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+for (subtype in subtypes) {
+  print(c("Subtype:", subtype))
+  
+  # Select genes
+  d8_subtype <- subtypes_d8[[subtype]]
+  d8_subtype_label <- metadata_df[colnames(d8_subtype), "label"]
+  ord_d8_subtype <- d8_subtype[, order(d8_subtype_label)]
+  size_remission <- sum(d8_subtype_label == 0)
+  label_pvalue <- calc_ttest(ord_d8_subtype, size_remission)
+  hist(label_pvalue, breaks = 20, main = subtype)
+  hist_label <- recordPlot()
+  HIST_WPATH <- sprintf("dump/hist_label-%s.pdf", subtype)
+  save_fig(hist_label, HIST_WPATH,
+           width = 6, height = 6)
+  
+  ALPHA <- 0.05
+  label_genes <- names(label_pvalue)[label_pvalue < ALPHA & !is.na(label_pvalue)]
+  print(c("No. of label genes = ", length(label_genes)))
+  
+  d8_label <- d8_subtype[selected_genes,]
+  pheatmap(d8_label, col = brewer.pal(9, "Blues"),
+           legend = T, border_color = "black", scale = "none",
+           cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+           show_colnames = F, show_rownames = F,
+           annotation_col = metadata_df)
+  heatmap_label <- recordPlot()
+  HEATMAP_WPATH <- sprintf("dump/heatmap_label-%s.pdf", subtype)
+  save_fig(heatmap_label, HEATMAP_WPATH,
+           width = 10, height = 10)
+  selected_genes <- setdiff(label_genes, batch_genes)
+  print(c("No. of selected genes = ", length(selected_genes)))
+  
+  # Subset pids in subtype
+  logi_idx <- rownames(metadata_df) %in% colnames(X) &
+    metadata_df$subtype == subtype
+  subtype_pid <- rownames(metadata_df)[logi_idx]
+  subset_pid <- c(subtype_pid, normal_pid)
+  
+  # Subtype and normal samples
+  subset_yeoh <- X[selected_genes, subset_pid]
+  idx <- 1:(ncol(subset_yeoh)-3)
+  response <- t(subset_yeoh)[idx,]
+  normal <- t(subset_yeoh)[-idx,]
+  print(colnames(subset_yeoh))
+  print(rownames(response))
+  
+  # # Collate MRD results as well
+  results <- calcERM(response, normal)
+  # SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/qpsp-%s.tsv", subtype)
+  # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
+  
+  # Plot
+  prediction_parallel <- plotPrediction(results, metadata_df)
+  PREDICTION_WPATH <- sprintf("dump/prediction-label_%s.pdf", subtype)
+  ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
+}
+
+##### PREDICTION (DRUG RESPONSIVE GENES) #####
+## Drug responsive genes
+# Nonlocals: pid_remission
+getLocalGenes <- function(X_subtype, pid_remission,
+                          alpha = 0.05, EXPR = 6, N = 50, LOGFC = 1) {
+  pid_idx <- intersect(pid_remission, colnames(X_subtype))
+  print(pid_idx)
+  X_subtype_remission <- X_subtype[,pid_idx, drop = F]
+  n_pairs <- ncol(X_subtype_remission)/2
+  # print(colnames(X_subtype_remission)[1:n_pairs])
+  # print(colnames(X_subtype_remission)[-(1:n_pairs)])
+  
+  # P-value
+  pvalue <- calc_ttest(X_subtype_remission, n_pairs, is_paired = T) # nan values!
+  print(head(sort(pvalue)))
+  
+  # # Plot
+  # hist(pvalue, breaks = 20, main = subtype)
+  # hist_class <- recordPlot()
+  # # HIST_WPATH <- sprintf("dump/hist_class-%s.pdf", subtype)
+  # save_fig(hist_class, HIST_WPATH,
+  #          width = 6, height = 6)
+  
+  # # Q-value
+  # calc_qvalue <- function(p) length(p)*p/rank(p)
+  # qvalue <- calc_qvalue(pvalue) # FDR threshold
+  # hist(qvalue, breaks =20)
+  
+  # Old log-fc
+  d0_mu <- rowMeans(X_subtype_remission[,1:n_pairs])
+  d8_mu <- rowMeans(X_subtype_remission[,-(1:n_pairs)])
+  # logfc <- d8_mu - d0_mu
+  
+  # Log-FC
+  paired_logfc <- X_subtype_remission[,-(1:n_pairs)] -
+    X_subtype_remission[,1:n_pairs] # D8 - D0
+  median_logfc <- apply(paired_logfc, 1, median)
+  # selected_median_logfc <- median_logfc[d0_mu > EXPR | d8_mu > EXPR]
+  # feat_top_median_logfc <- names(head(sort(selected_median_logfc), N))
+  
+  # Custom t-statistic
+  deviation_median <- sweep(paired_logfc, 1, median_logfc, "-")
+  median_abs_dev <- apply(abs(deviation_median), 1, median)
+  test_stat <- median_logfc/(median_abs_dev/n_pairs^0.5)
+  pvalue <- pt(abs(test_stat)*-1, n_pairs-1)
+  hist(pvalue, breaks = 30)
+  feat_selected_p <- names(head(sort(pvalue), N))
+  
+  # feat_p <- names(pvalue)[pvalue < alpha & !is.na(pvalue)]
+  # # At least one of the means have to be > EXPR
+  # feat_log2fc <- names(selected_median_logfc)[
+  #   abs(selected_median_logfc) > LOGFC &
+  #   !is.na(selected_median_logfc)
+  # ]
+  # print(sprintf("No. of features (p-value) = %d", length(feat_p)))
+  # print(sprintf("No. of features (log2-fc) = %d", length(feat_log2fc)))
+  # feat <- intersect(feat_p, feat_log2fc)
+  
+  # # Top N p-value < alpha
+  # selected_pvalue <- pvalue[pvalue < alpha & !is.na(pvalue)]
+  # feat_selected_p <- names(head(sort(selected_pvalue), N))
+  
+  return(feat_selected_p)
+}
+
+# Factor to split data
+subtype_factor <- as.factor(metadata_df[colnames(data_yeoh), "subtype"])
+subtypes_yeoh <- split.default(data_yeoh, subtype_factor, drop = F) # Split by subtype
+
+length(batch_genes)
+X <- data_yeoh
+normal_pid <- paste0("N0", c(1,2,4))
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+# list_selected <- list()
+for (subtype in subtypes) {
+  print(c("Subtype:", subtype))
+  
+  # Select genes
+  X_subtype <- subtypes_yeoh[[subtype]]
+  class_genes <- getLocalGenes(X_subtype, pid_remission)
+  print(c("No. of selected genes = ", length(class_genes)))
+
+  # X_class <- X_subtype[class_genes,]
+  # pheatmap(X_class, col = brewer.pal(9, "Blues"),
+  #          legend = T, border_color = "black", scale = "none",
+  #          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+  #          show_colnames = F, show_rownames = F,
+  #          annotation_col = metadata_df)
+  # heatmap_class <- recordPlot()
+  # HEATMAP_WPATH <- sprintf("dump/heatmap_class-%s.pdf", subtype)
+  # save_fig(heatmap_class, HEATMAP_WPATH,
+  #          width = 10, height = 10)
+
+  selected_genes <- setdiff(class_genes, batch_genes)
+  print(c("No. of final genes = ", length(selected_genes)))
+  # list_selected <- append(list_selected, list(selected_genes))
+  
+  # Subset pids in subtype
+  logi_idx <- rownames(metadata_df) %in% colnames(X) &
+    metadata_df$subtype == subtype
+  subtype_pid <- rownames(metadata_df)[logi_idx]
+  subset_pid <- c(subtype_pid, normal_pid)
+
+  # Subtype and normal samples
+  # subset_yeoh <- X[class_genes, subset_pid] # TODO
+  subset_yeoh <- X[selected_genes, subset_pid]
+  idx <- 1:(ncol(subset_yeoh)-3)
+  response <- t(subset_yeoh)[idx,]
+  normal <- t(subset_yeoh)[-idx,]
+  print(colnames(subset_yeoh))
+  print(rownames(response))
+  
+  # Collate MRD results as well
+  results <- calcERM(response, normal)
+
+  # Plot
+  prediction_parallel <- plotPrediction(results, metadata_df)
+  PREDICTION_WPATH <- sprintf("dump/prediction_s5b2-%s.pdf", subtype)
+  ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
+}
+
+hist(as.numeric(data_yeoh[,5]), breaks = 40)
+
+## List of selected genes from each subtype
+names(list_selected) <- subtypes
+
+upset(fromList(list_selected),
+      nsets = length(list_selected),
+      nintersects = NA,
+      order.by = "freq")
+upset_plot <- recordPlot()
+upset_plot
+save_fig(upset_plot, "dump/upset-selected_genes.pdf",
+         width = 10, height = 5)
+
+# Subset of intersected genes
+subset_selected <- list_selected[-c(1,4)]
+intersect_genes <- Reduce(intersect, subset_selected)
+
+##### PREDICTION (SUBTYPE SIGNATURE GENES) #####
+pid_d0 <- rownames(metadata_df)[metadata_df$class_info == "D0"]
+pid_remission <- rownames(metadata_df)[metadata_df$label == 0]
+# Recursive intersect
+pid_idx <- intersect(
+  intersect(pid_remission, pid_d0),
+  colnames(data_yeoh)
+)
+X_d0_remission <- data_yeoh[,pid_idx]
+
+## Chi-squared test
+length(batch_genes)
+normal_pid <- paste0("N0", c(1,2,4))
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+# list_selected <- list()
+for (subtype in subtypes) {
+  subtype <- subtypes[1]
+  print(c("Subtype:", subtype))
+  
+  # Select genes
+  X_subtype <- X_d0_remission
+  class_genes <- getLocalGenes(X_subtype, pid_remission)
+  print(c("No. of selected genes = ", length(class_genes)))
+  
+  # X_class <- X_subtype[class_genes,]
+  # pheatmap(X_class, col = brewer.pal(9, "Blues"),
+  #          legend = T, border_color = "black", scale = "none",
+  #          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+  #          show_colnames = F, show_rownames = F,
+  #          annotation_col = metadata_df)
+  # heatmap_class <- recordPlot()
+  # HEATMAP_WPATH <- sprintf("dump/heatmap_class-%s.pdf", subtype)
+  # save_fig(heatmap_class, HEATMAP_WPATH,
+  #          width = 10, height = 10)
+  
+  selected_genes <- setdiff(class_genes, batch_genes)
+  print(c("No. of final genes = ", length(selected_genes)))
+  # list_selected <- append(list_selected, list(selected_genes))
+  
+  # Subset pids in subtype
+  logi_idx <- rownames(metadata_df) %in% colnames(X) &
+    metadata_df$subtype == subtype
+  subtype_pid <- rownames(metadata_df)[logi_idx]
+  subset_pid <- c(subtype_pid, normal_pid)
+  
+  # Subtype and normal samples
+  # subset_yeoh <- X[class_genes, subset_pid] # TODO
+  subset_yeoh <- X[selected_genes, subset_pid]
+  idx <- 1:(ncol(subset_yeoh)-3)
+  response <- t(subset_yeoh)[idx,]
+  normal <- t(subset_yeoh)[-idx,]
+  print(colnames(subset_yeoh))
+  print(rownames(response))
+  
+  # Collate MRD results as well
+  results <- calcERM(response, normal)
+  
+  # Plot
+  prediction_parallel <- plotPrediction(results, metadata_df)
+  PREDICTION_WPATH <- sprintf("dump/prediction_s5b2-%s.pdf", subtype)
+  ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
+}
+
+
+
+
+
+### TODO: Investigate
+g <- setdiff(class_genes, selected_genes)
+
+batch <- metadata_df[colnames(D), "batch_info"]
+class <- as.factor(metadata_df[colnames(D), "class_info"])
+label <- metadata_df[colnames(D), "label"]
+D <- X[g, subset_pid]
+
+plot(as.numeric(D[3,]), col = batch, pch = as.numeric(class)+15,
+     cex = label+1)
+# plot timepoint and batch and label
+
