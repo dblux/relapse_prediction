@@ -970,15 +970,15 @@ pid_idx <- intersect(
 d0_telaml1 <- data_yeoh[,pid_idx]
 d0_batch <- metadata_df[colnames(d0_telaml1), "batch_info"]
 
-##### TRIAL PLOT
-batches_telaml1 <- split.default(d0_telaml1, d0_batch, drop = F) # Split by subtype
-
-par(mfrow=c(4,2), mar=c(2,2,2,1))
-for (i in 1:8) {
-  X <- as.numeric(batches_telaml1[[i]][1,])
-  stripchart(X, pch = 1, cex = 2)
-}
-### END ###
+# ##### TRIAL PLOT
+# batches_telaml1 <- split.default(d0_telaml1, d0_batch, drop = F) # Split by subtype
+# 
+# par(mfrow=c(4,2), mar=c(2,2,2,1))
+# for (i in 1:8) {
+#   X <- as.numeric(batches_telaml1[[i]][1,])
+#   stripchart(X, pch = 1, cex = 2)
+# }
+# ### END ###
 
 d0_telaml1_t <- t(d0_telaml1)
 #' @param X matrix with samples as rows and features as columns
@@ -1182,29 +1182,28 @@ normal_pid <- paste0("N0", c(1,2,4))
 all_subtypes <- levels(metadata_df$subtype)
 subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
 pid_remission <- rownames(metadata_df)[metadata_df$label == 0]
-# list_drug_genes <- list()
+list_drug_genes <- list()
 for (subtype in subtypes) {
-  subtype <- subtypes[[6]]
   print(c("Subtype:", subtype))
   
   # Select genes
   X_subtype <- X_subtypes[[subtype]]
   class_genes <- getLocalGenes(X_subtype, pid_remission)
   print(c("No. of selected genes = ", length(class_genes)))
-  # list_drug_genes <- append(list_drug_genes, list(class_genes))
+  list_drug_genes <- append(list_drug_genes, list(class_genes))
   
-  selected_genes <- setdiff(class_genes, batch_genes)
-  print(c("No. of final genes = ", length(selected_genes)))
-
-  # Subset pids in subtype
-  logi_idx <- rownames(metadata_df) %in% colnames(X) &
-    metadata_df$subtype == subtype
-  subtype_pid <- rownames(metadata_df)[logi_idx]
-  subset_pid <- c(subtype_pid, normal_pid)
-  
-  # Plot PCA
-  X_class <- X[selected_genes, subset_pid]
-  plotPCA3DYeoh(X_class, metadata_df)
+  # selected_genes <- setdiff(class_genes, batch_genes)
+  # print(c("No. of final genes = ", length(selected_genes)))
+  # 
+  # # Subset pids in subtype
+  # logi_idx <- rownames(metadata_df) %in% colnames(X) &
+  #   metadata_df$subtype == subtype
+  # subtype_pid <- rownames(metadata_df)[logi_idx]
+  # subset_pid <- c(subtype_pid, normal_pid)
+  # 
+  # # Plot PCA
+  # X_class <- X[selected_genes, subset_pid]
+  # plotPCA3DYeoh(X_class, metadata_df)
   
   # # Plot heatmap
   # X_class <- X[class_genes, subset_pid]
@@ -1256,7 +1255,7 @@ save_fig(upset_plot, "dump/upset-selected_genes.pdf",
 subset_selected <- list_selected[-c(1,4)]
 intersect_genes <- Reduce(intersect, subset_selected)
 
-# Prediction (Subtype genes) --------------------------------------------
+# Prediction (Subtype genes - Chi2) --------------------------------------------
 pid_d0 <- rownames(metadata_df)[metadata_df$class_info == "D0"]
 pid_remission <- rownames(metadata_df)[metadata_df$label == 0]
 # Recursive intersect
@@ -1372,6 +1371,116 @@ plotHeatmapSubtype <- function(X, metadata_df) {
   return(heatmap_subtype)
 }
 
+# Prediction (Subtype genes - T-test) --------------------------------------
+pid_d0 <- rownames(metadata_df)[metadata_df$class_info == "D0"]
+pid_remission <- rownames(metadata_df)[metadata_df$label == 0]
+# Recursive intersect
+pid_idx <- intersect(
+  intersect(pid_remission, pid_d0),
+  colnames(data_yeoh)
+)
+X_d0_remission <- data_yeoh[,pid_idx]
+X <- data_yeoh
+# Factor to split data
+length(batch_genes)
+normal_pid <- paste0("N0", c(1,2,4))
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+ALPHA <- 0.05
+THRESHOLD <- 1
+list_subtype_genes <- list()
+for (subtype in subtypes) {
+  subtype <- subtypes[[5]]
+  print(c("Subtype:", subtype))
+  
+  # Assigning subtype labels (one vs rest)
+  subtype_info <- metadata_df[colnames(X_d0_remission), "subtype"]
+  X_subtype <- X_d0_remission[,subtype_info == subtype]
+  X_rest <- X_d0_remission[,subtype_info != subtype]
+  p <- calc_ttest(cbind(X_subtype, X_rest), ncol(X_subtype))
+  feat_p <- names(p)[p < ALPHA & !is.na(p)]
+  logfc <- calc_logfc(X_subtype, X_rest)
+  feat_logfc <- names(logfc)[abs(logfc) > THRESHOLD]
+  feat_intersect <- intersect(feat_p, feat_logfc)
+  print(sprintf("No. of features (p-value) = %d", length(feat_p)))
+  print(sprintf("No. of features (log2-fc) = %d", length(feat_logfc)))
+  print(sprintf("No. of features (intersect) = %d", length(feat_intersect)))
+  # list_subtype_genes <- append(list_subtype_genes, list(feat_intersect))
+  
+  # hist(gene_p, breaks = 20, main = subtype)
+  # hist_p <- recordPlot()
+  # HIST_WPATH <- sprintf("dump/hist_chi2_p-%s.pdf", subtype)
+  # save_fig(hist_p, HIST_WPATH)
+  
+  # # Plot heatmap
+  # X_subtype_ttest <- X_d0_remission[feat_intersect,]
+  # pheatmap(X_subtype_ttest, col = brewer.pal(9, "Blues"),
+  #          legend = T, border_color = "black", scale = "none",
+  #          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+  #          show_colnames = F, show_rownames = F,
+  #          annotation_col = metadata_df)
+  # heatmap_class <- recordPlot()
+  # HEATMAP_WPATH <- sprintf("dump/heatmap_subtype_ttest1-%s.pdf", subtype)
+  # save_fig(heatmap_class, HEATMAP_WPATH,
+  #          width = 10, height = 10)
+  
+  # X_subtype_ttest <- X_d0_remission[feat_intersect,]  
+  # heatmap_subtype <- plotHeatmapSubtype(X_subtype_ttest, metadata_df)
+  # HEATMAP_WPATH <- sprintf("dump/heatmap_subtype_ttest-%s.pdf", subtype)
+  # save_fig(heatmap_subtype, HEATMAP_WPATH,
+  #          width = 6, height = 6)
+  
+  selected_genes <- setdiff(feat_intersect, batch_genes)
+  print(c("No. of final genes = ", length(selected_genes)))
+
+  # Subset pids in subtype
+  logi_idx <- rownames(metadata_df) %in% colnames(X) &
+    metadata_df$subtype == subtype
+  subtype_pid <- rownames(metadata_df)[logi_idx]
+  subset_pid <- c(subtype_pid, normal_pid)
+
+  # Subtype and normal samples
+  # subset_yeoh <- X[class_genes, subset_pid] # TODO
+  subset_yeoh <- X[selected_genes, subset_pid]
+  idx <- 1:(ncol(subset_yeoh)-3)
+  response <- t(subset_yeoh)[idx,]
+  normal <- t(subset_yeoh)[-idx,]
+  print(colnames(subset_yeoh))
+  print(rownames(response))
+
+  # Collate MRD results as well
+  results <- calcERM(response, normal)
+
+  # Plot
+  prediction_parallel <- plotPrediction(results, metadata_df)
+  PREDICTION_WPATH <- sprintf("dump/prediction_subtype_ttest-%s.pdf", subtype)
+  ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
+}
+str(list_subtype_genes)
+names(list_subtype_genes) <- subtypes
+saveRDS(list_subtype_genes, "temp/list_subtype_genes_ttest.rds")
+
+plotHeatmapSubtype <- function(X, metadata_df) {
+  subtype_factor <- metadata_df[colnames(X), "subtype"]
+  set3_pal <- brewer.pal(9, "Set3")
+  subtype_col <- set3_pal[subtype_factor]
+  
+  par(mar = c(1,1,1,1))
+  heatmap(data.matrix(X),
+          col = brewer.pal(9, "Blues"),
+          ColSideColors = subtype_col,
+          scale = "none",
+          labRow = NA, labCol = NA)
+  
+  legend(x = "topleft", legend = levels(subtype_factor),
+         col = set3_pal[factor(levels(subtype_factor))],
+         pch = 15, cex = .6)
+  heatmap_subtype <- recordPlot()
+  par(mar = c(5.1, 4.1, 4.1, 2.1)) # Reset to default
+  return(heatmap_subtype)
+}
+
+# Prediction (Drug AND Subtype genes) ------------------------------------
 plotVenn <- function(vec1, vec2) {
   # Generate overlap list
   overlap_list <- calculate.overlap(list(vec1,vec2))
@@ -1394,11 +1503,11 @@ plotVenn <- function(vec1, vec2) {
   
   return(overlap_list[[3]])
 }
-
+str(list_drug_genes)
+str(list_subtype_genes)
 list_intersect <- mapply(plotVenn, list_drug_genes, list_subtype_genes)
 str(list_intersect)
 
-# Prediction (Drug AND Subtype genes) ------------------------------------
 subtype_factor <- as.factor(metadata_df[colnames(data_yeoh), "subtype"])
 subtypes_yeoh <- split.default(data_yeoh, subtype_factor, drop = F) # Split by subtype
 X <- data_yeoh
@@ -1406,16 +1515,16 @@ for (i in 2:7) {
   genes <- list_intersect[[i]]
   subtype <- names(list_intersect)[[i]]
   X_intersect <- data_yeoh[genes,]
-  pheatmap(X_intersect, col = brewer.pal(9, "Blues"),
-           legend = T, border_color = "black", scale = "none",
-           cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
-           show_colnames = F, show_rownames = F,
-           annotation_col = metadata_df)
-  
-  heatmap_class <- recordPlot()
-  HEATMAP_WPATH <- sprintf("dump/heatmap_intersect-%s.pdf", subtype)
-  save_fig(heatmap_class, HEATMAP_WPATH,
-           width = 10, height = 10)
+  # pheatmap(X_intersect, col = brewer.pal(9, "Blues"),
+  #          legend = T, border_color = "black", scale = "none",
+  #          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+  #          show_colnames = F, show_rownames = F,
+  #          annotation_col = metadata_df)
+  # 
+  # heatmap_class <- recordPlot()
+  # HEATMAP_WPATH <- sprintf("dump/heatmap_intersect-%s.pdf", subtype)
+  # save_fig(heatmap_class, HEATMAP_WPATH,
+  #          width = 10, height = 10)
   
   selected_genes <- setdiff(genes, batch_genes)
   print(c("No. of final genes = ", length(selected_genes)))
@@ -1439,7 +1548,7 @@ for (i in 2:7) {
 
   # Plot
   prediction_parallel <- plotPrediction(results, metadata_df)
-  PREDICTION_WPATH <- sprintf("dump/prediction_intersect-%s.pdf", subtype)
+  PREDICTION_WPATH <- sprintf("dump/prediction_intersect_ttest-%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
 

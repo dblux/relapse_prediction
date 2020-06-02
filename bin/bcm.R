@@ -427,3 +427,210 @@ correctSVDBCM <- function(df1, metadata_df, ref_batch) {
   return(list(data = corrected_df, plot = list_plot,
               corrected_plot = list_corrected_plot))
 }
+
+
+# SANDBOX -----------------------------------------------------------------
+source("../functions.R")
+library(sva)
+
+## Subset of original data
+# Removed outliers, patients with timepoints from different batches and batch 5
+SUBSET_RPATH <- "data/GSE67684/processed/subset_yeoh.tsv"
+subset_yeoh <- read.table(SUBSET_RPATH, sep = "\t")
+
+## Metadata
+# Preprocessed metadata
+METADATA_RPATH <- "data/GSE67684/processed/metadata/full_metadata.tsv"
+metadata_df <- read.table(METADATA_RPATH, sep = "\t")
+
+# BATCH_RPATH <- "data/GSE67684/processed/metadata/metadata-batch.tsv"
+# LABEL_RPATH <- "data/GSE67684/processed/metadata/metadata-label_mrd_subtype.tsv"
+# yeoh_batch <- read.table(BATCH_RPATH, sep = "\t", header = T, row.names = 1)
+# yeoh_label <- read.table(LABEL_RPATH, sep = "\t", header = T, row.names = 1)
+
+# SCALE->REMOVE->FILTER->LOG
+scaled_yeoh <- normaliseMeanScaling(subset_yeoh)
+subset_yeoh <- removeProbesets(scaled_yeoh)
+data_yeoh <- log2_transform(filterProbesets(subset_yeoh, 0.7, metadata_df))
+
+table(metadata_df$batch_info, metadata_df$subtype)
+
+library(Rgraphviz)
+# library(igraph)
+
+#' @param X dataframe of gene expression data
+#' @param batch vector of batch factors
+#' @param metadata dataframe containing all relevant class information
+correctMultilevel <- function(X, batch, metadata, order_batch,
+                              correction_wpath = "dump/correction_vectors.tsv") {
+  # TODO: PARAMETERS
+  X <- data_yeoh
+  batch <- metadata_df[colnames(data_yeoh), "batch_info"]
+  metadata <- metadata_df[colnames(data_yeoh), 2:3]
+  ref_batch <- 2
+  
+  batch <- as.factor(batch)
+  metadata <- data.frame(lapply(metadata, as.factor),
+                         row.names = rownames(metadata))
+  ## Check that batches share at least one category
+  # Create G = (V: Batches, E: Common categories)
+  # Check that graph is fully connected
+  complete_metadata <- cbind( batch, metadata)
+  all_combi <- unname(unique(complete_metadata))
+  # Split according to all possible combinations of categories
+  list_combi <- split(all_combi, all_combi[2:3], drop = T, sep = "_")
+  nbatches_combi <- sapply(list_combi, nrow)
+  print(names(list_combi)[nbatches_combi == 1]) # Present in one batch only
+  # All pairwise combinations between batches in each combi
+  list_pairwise <- lapply(list_combi[nbatches_combi > 1],
+                          function(X) t(combn(X[,1], 2)))
+  list_edges <- do.call(rbind, list_pairwise) # Edge list for graph
+  n_pairwise <- sapply(list_pairwise, nrow)
+  edge_names <- rep(names(n_pairwise), n_pairwise)
+  edge_cols <- do.call(rbind, strsplit(edge_names, "_"))
+  edge_list <- cbind(list_edges, edge_cols) # With edge attributes
+  batch_df <- data.frame(batch = as.character(sort(unique(batch))))
+  G <- graph_from_data_frame(edge_list, directed = F,
+                             vertices = batch_df)
+  plot.igraph(G)
+  stopifnot(is_connected(G)) # There is a batch which has no common class
+  # TODO: Decide reference batch (Simplify graph and one with highest degree?
+  # Also need to consider the magnitude of correction?)
+  
+  # Split df by batches into list
+  list_batches <- split.default(X, batch)
+  # Define first reference batch and list of other df
+  ref_df <- list_batches[[ref_batch]]
+  list_df <- list_batches[-ref_batch]
+  
+  #' Recursive function that selects batches with shared class with 
+  #' reference batch and corrects accordingly returning corrected data
+  #' @param ref_df dataframe of reference batch
+  #' @param list_df list of dataframes of all other batches aside
+  #' from reference batch
+  #' @return batch corrected data
+  recursive_correction <- function(ref_df, list_df) {
+    if (length(list_df) == 0) return(ref_df)
+    else {
+      # BATCH EFFECT CORRECTION
+      ref_class_info <- as.character(metadata_df[colnames(ref_df),
+                                                 "class_info"])
+      ref_levels <- unique(ref_class_info)
+      
+      list_other_classes <- lapply(
+        list_df, function(nonref_df) metadata_df[colnames(nonref_df),
+                                                 "class_info"]
+      )
+      
+      # Logical vector selecting batches that have at least one intersecting
+      # class
+      is_intersect <- sapply(list_other_classes,
+                             function(vec) any(unique(vec) %in% ref_levels))
+      list_intersect_batches <- list_df[is_intersect]
+      # To be returned
+      list_remaining <- list_df[!is_intersect]
+      
+      # CALCULATE CENTROIDS FOR EACH CLASS IN REF_DF
+      # Split into list of class df
+      list_ref_df <- split.default(ref_df, ref_class_info)
+      # Order list according to name
+      list_ref_df <- list_ref_df[order(names(list_ref_df))]
+      print(str(ref_df))
+      print(str(list_ref_df))
+      list_ref_centroids <- lapply(list_ref_df, apply, 1, mean, trim = 0.2)
+      
+      # Corrects to ref_df
+      # Argument: Uncorrected df with intersecting class
+      # Return: Corrected df of a single batch
+      # Global: Variables belonging to ref_batch
+      single_correction <- function(other_df) {
+        other_class_info <- as.character(metadata_df[colnames(other_df),
+                                                     "class_info"])
+        print("other_class_info"); print(other_class_info)
+        other_levels <- unique(other_class_info)
+        # Find classes that appear in both batches (Impt to sort!!!)
+        intersect_classes <- sort(intersect(ref_levels, other_levels))
+        
+        # Split other_df into classes
+        list_other_df <- split.default(other_df, other_class_info)
+        # Order list according to name
+        list_other_df <- list_other_df[order(names(list_other_df))]
+        print(str(other_df))
+        print(str(list_other_df))
+        list_other_centroids <- lapply(list_other_df,
+                                       apply, 1, mean, trim = 0.2)
+        str(list_other_centroids)
+        
+        # Calculate correction vectors for intersect classes
+        # Anchor: df1, hence df2_centroid - df1_centroid (order matters!!!)
+        calc.correction <-  function(class_char) {
+          list_other_centroids[[class_char]] - list_ref_centroids[[class_char]]
+        }
+        # Convert to df and name according to classes
+        correction_vectors <- data.frame(lapply(intersect_classes,
+                                                calc.correction))
+        colnames(correction_vectors) <- intersect_classes
+        
+        # Identify classes in other_df that are not present in intersect_classes
+        extra_classes <- setdiff(other_levels, intersect_classes)
+        print(paste("Extra classes:", extra_classes))
+        print(paste("Extra classes:", length(extra_classes)))
+        if(length(extra_classes) != 0) {
+          # Arguments: Class string (one of the extra classes)
+          # Returns df of correction vector for class
+          # Correction vector is replicated from correction vector of nearest class
+          calc.correction_vec <- function(class) {
+            # # Logical vector selecting current class
+            # class_logvec <- names(list_df2_centroid) == class
+            # centroid_vec <- unlist(list_df2_centroid[class_logvec])
+            # list_other_centroids <- list_df2_centroid[!class_logvec]
+            centroid_vec <- list_other_centroids[[class]]
+            # Calculate euclidean distance of current centroid to intersection centroids
+            distance_vec <- sapply(list_other_centroids[intersect_classes],
+                                   function(vec) calcL2Norm(vec-centroid_vec))
+            nearest_class <- names(sort(distance_vec))[1]
+            # Use correction vector of nearest class
+            correction_df <- correction_vectors[,nearest_class, drop = F]
+            colnames(correction_df) <- class
+            return(correction_df)
+          }
+          # Returns list of single column df for all extra_classes
+          list_correction <- lapply(extra_classes, calc.correction_vec)
+          extra_correction_df <- do.call(cbind, list_correction)
+          # Append to correction_vectors
+          correction_vectors <- cbind(correction_vectors, extra_correction_df)
+        }
+        # Sort correction vectors
+        correction_vectors <- correction_vectors[,order(colnames(correction_vectors))]
+        # TODO: Give different filenames for different pairwise correction
+        write.table(correction_vectors, correction_wpath,
+                    quote = F, sep = "\t")
+        # Ensure that correction_vectors is ordered the same way as list_class_df2
+        print(names(list_other_df))
+        print(colnames(correction_vectors))
+        stopifnot(identical(names(list_other_df), colnames(correction_vectors)))
+        # Apply correction for each class in df2 (list_class_df2)
+        list_other_corrected <- unname(mapply(function(df, vec) df-vec,
+                                              list_other_df, correction_vectors,
+                                              SIMPLIFY = F))
+        corrected_df <- do.call(cbind, list_other_corrected)
+        # Replace all negative values with 0
+        corrected_df[corrected_df < 0] <- 0
+        return(corrected_df)
+      }
+      list_corrected_df <- unname(lapply(list_intersect_batches,
+                                         single_correction))
+      # Corrected df contains all samples
+      final_df <- cbind(ref_df, do.call(cbind, list_corrected_df))
+      # Replace all negative values with 0
+      final_df[final_df < 0] <- 0
+      # Recursive call
+      recursive_correction(final_df, list_remaining)
+    }
+  }
+  
+  final_df <- recursive_correction(ref_df, list_df)
+  # Sort the corrected df
+  return(final_df[,colnames(df1)])
+
+}
