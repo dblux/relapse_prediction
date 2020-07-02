@@ -9,6 +9,7 @@ library(RColorBrewer)
 library(pheatmap)
 library(UpSetR)
 library(VennDiagram)
+library(xtable)
 # library(Rtsne)
 # library(dendextend)
 
@@ -16,7 +17,7 @@ library(VennDiagram)
 source("../functions.R")
 source("bin/bcm.R")
 
-theme_set(theme_cowplot())
+theme_set(theme_gray())
 
 # FUNCTIONS ---------------------------------------------------------------
 plot_mean <- function(df, batch_vec1) {
@@ -257,27 +258,37 @@ plotJitterYeoh <- function(X, metadata_df, n_pc = 10) {
   return(fig)  
 }
 
-yeoh_label
-
-plotPrediction <- function(results, metadata_df) {
+plotPrediction <- function(results, metadata_df, yeoh_label) {
   y <- as.factor(metadata_df[rownames(results),"label"])
   features1 <- results[,c("erm1_ratio2", "l2norm_ratio2"), drop=F]
   features2 <- results[, "angle_d0d8_normal", drop=F]
+  
+  # D33 MRD
+  pid_idx <- substr(rownames(results), 1, 4)
+  d33_mrd <- yeoh_label[pid_idx, "d33_mrd"]
+  mrd_rank <- rank(d33_mrd, na.last = T, ties.method="min")
+  mrd_percent <- (mrd_rank-1)/sum(!is.na(d33_mrd))
+  mrd_percent[is.na(d33_mrd)] <- NA
   
   # Two different ways of rankings
   features_rankdesc <- apply(-features1, 2, rank, ties.method="min")
   features_percentdesc <- (features_rankdesc-1)/nrow(features1)
   features_rankasc <- apply(features2, 2, rank, ties.method="min")
   features_percentasc <- (features_rankasc-1)/nrow(features2)
-  features_percent <- cbind(features_percentdesc, features_percentasc)
+  features_percent <- cbind(features_percentdesc, features_percentasc,
+                            mrd_percent)
+  
+  if (sum(is.na(features_percentasc), is.na(features_percentdesc)) > 0)
+    warning("Features contain NA values")
   
   # Calculate p for features and avg_p
-  avg_percent <- rowMeans(features_percent)
+  avg_percent <- rowMeans(features_percent, na.rm = T)
   avgpercent_y <- data.frame(p = avg_percent, label = y)
   percent_y <- cbind(pid = rownames(features_percent),
-                     features_percent, avgpercent_y)
+                     avgpercent_y, features_percent)
   long_percent_y <- melt(percent_y, id = c("pid", "label"),
                          variable.name = "feature")
+  
   pid_idx <- substr(rownames(avgpercent_y), 1, 4)
   avgpercent_mrd <- cbind(avgpercent_y,
                           d33_mrd = -log10(yeoh_label[pid_idx, "d33_mrd"]))
@@ -324,7 +335,7 @@ plotPrediction <- function(results, metadata_df) {
     theme(axis.title.y = element_blank())
   
   ax1 <- plot_grid(jitter_features, emp_cdf, rel_risk,
-                   ncol = 3, rel_widths = c(3,1,1))
+                   ncol = 3, rel_widths = c(2.5,1.2,1.3))
   
   parallel <- ggplot(long_percent_y) +
     geom_line(aes(feature, value, colour = label, group = pid),
@@ -338,8 +349,6 @@ plotPrediction <- function(results, metadata_df) {
   ax2 <- plot_grid(parallel, mrd_p, ncol = 2, rel_widths = c(2.5,1))
   
   fig <- plot_grid(ax1, ax2, nrow = 2)
-  
-  print(avgpercent_mrd)
   return(fig)
 }
 
@@ -377,7 +386,7 @@ splitSubtype <- function(X, metadata_df) {
 ## Subset of original data
 # Removed outliers, patients with timepoints from different batches and batch 5
 SUBSET_RPATH <- "data/GSE67684/processed/subset_yeoh.tsv"
-subset_yeoh <- read.table(SUBSET_RPATH, sep = "\t")
+raw_yeoh <- read.table(SUBSET_RPATH, sep = "\t")
 
 ## Metadata
 # Preprocessed metadata
@@ -390,9 +399,9 @@ yeoh_batch <- read.table(BATCH_RPATH, sep = "\t", header = T, row.names = 1)
 yeoh_label <- read.table(LABEL_RPATH, sep = "\t", header = T, row.names = 1)
 
 # SCALE->REMOVE->FILTER->LOG
-scaled_yeoh <- normaliseMeanScaling(subset_yeoh)
-subset_yeoh <- removeProbesets(scaled_yeoh)
-data_yeoh <- log2_transform(filterProbesets(subset_yeoh, 0.7, metadata_df))
+scaled_yeoh <- normaliseMeanScaling(raw_yeoh)
+selected_yeoh <- removeProbesets(scaled_yeoh)
+data_yeoh <- log2_transform(filterProbesets(selected_yeoh, 0.7, metadata_df))
 
 # # Filter out all rows with zero values
 # logi_idx <- rowSums(data_yeoh == 0) == 0
@@ -685,7 +694,7 @@ SUBTYPE_WPATH <- sprintf("temp/remove_batch_pc/global_qpsp.tsv")
 write.table(results, SUBTYPE_WPATH, sep = "\t", quote = F)
 
 
-globalqpsp_prediction <- plotPrediction(results, metadata_df)
+globalqpsp_prediction <- plotPrediction(results, metadata_df, yeoh_label)
 ggsave("dump/prediction-globalqpsp.pdf",
        globalqpsp_prediction, width = 12, height = 6)
 
@@ -761,7 +770,7 @@ for (subtype in names(remove_pc)) {
   # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
   
   # Plot
-  qpsp_prediction <- plotPrediction(results, metadata_df)
+  qpsp_prediction <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("dump/remove_batchpc-%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, qpsp_prediction, width = 12, height = 7)
 }
@@ -884,7 +893,7 @@ idx <- 1:(ncol(class_yeoh)-3)
 classgenes_response <- t(class_yeoh)[idx,]
 classgenes_normal <- t(class_yeoh)[-idx,]
 features1 <- calcERM(classgenes_response, classgenes_normal)
-global_prediction_class <- plotPrediction(features1, metadata_df)
+global_prediction_class <- plotPrediction(features1, metadata_df, yeoh_label)
 ggsave("dump/prediction-global_classgenes.pdf", global_prediction_class,
        width = 8, height = 6)
 
@@ -893,7 +902,7 @@ idx <- 1:(ncol(batch_yeoh)-3)
 batchgenes_response <- t(batch_yeoh)[idx,]
 batchgenes_normal <- t(batch_yeoh)[-idx,]
 features2 <- calcERM(batchgenes_response, batchgenes_normal)
-global_prediction_batch <- plotPrediction(features2, metadata_df)
+global_prediction_batch <- plotPrediction(features2, metadata_df, yeoh_label)
 ggsave("dump/prediction-global_batchgenes.pdf", global_prediction_batch,
        width = 8, height = 6)
 
@@ -902,7 +911,7 @@ idx <- 1:(ncol(label_yeoh)-3)
 labelgenes_response <- t(label_yeoh)[idx,]
 labelgenes_normal <- t(label_yeoh)[-idx,]
 features2 <- calcERM(labelgenes_response, labelgenes_normal)
-global_prediction_label <- plotPrediction(features2, metadata_df)
+global_prediction_label <- plotPrediction(features2, metadata_df, yeoh_label)
 ggsave("dump/prediction-global_labelgenes.pdf", global_prediction_label,
        width = 8, height = 6)
 
@@ -911,7 +920,7 @@ idx <- 1:(ncol(subtype_yeoh)-3)
 subtypegenes_response <- t(subtype_yeoh)[idx,]
 subtypegenes_normal <- t(subtype_yeoh)[-idx,]
 features2 <- calcERM(subtypegenes_response, subtypegenes_normal)
-global_prediction_subtype <- plotPrediction(features2, metadata_df)
+global_prediction_subtype <- plotPrediction(features2, metadata_df, yeoh_label)
 ggsave("dump/prediction-global_subtypegenes.pdf", global_prediction_subtype,
        width = 8, height = 6)
 
@@ -941,7 +950,7 @@ for (subtype in subtypes) {
   # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
   
   # Plot
-  prediction_parallel <- plotPrediction(results, metadata_df)
+  prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("dump/prediction-subtypegenes_%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
@@ -986,7 +995,7 @@ for (subtype in subtypes) {
   # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
   
   # Plot
-  prediction <- plotPrediction(results, metadata_df)
+  prediction <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("dump/prediction-subtypegenes_pca_%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction, width = 12, height = 7)
 }
@@ -1050,7 +1059,7 @@ for (subtype in subtypes) {
   # write.table(results_df, SUBTYPE_WPATH, sep = "\t", quote = F)
   
   # Plot
-  prediction_parallel <- plotPrediction(results, metadata_df)
+  prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("dump/prediction-label_%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
@@ -1143,6 +1152,7 @@ getLocalGenes <- function(X_subtype, pid_remission,
   pid_idx <- intersect(pid_remission, colnames(X_subtype))
   print(pid_idx)
   X_subtype_remission <- X_subtype[,pid_idx, drop = F]
+  print(c("Dimension:", dim(X_subtype_remission)))
   n_pairs <- ncol(X_subtype_remission)/2
   # print(colnames(X_subtype_remission)[1:n_pairs])
   # print(colnames(X_subtype_remission)[-(1:n_pairs)])
@@ -1196,20 +1206,24 @@ getLocalGenes <- function(X_subtype, pid_remission,
 # Factor to split data
 subtypes_yeoh <- splitSubtype(data_yeoh, metadata_df)
 
-length(batch_genes)
 X_subtypes <- subtypes_yeoh
 X <- data_yeoh
 normal_pid <- paste0("N0", c(1,2,4))
 all_subtypes <- levels(metadata_df$subtype)
 subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
 pid_remission <- rownames(metadata_df)[metadata_df$label == 0]
+
 # list_drug_genes <- list()
 for (subtype in subtypes) {
-  subtype <- subtypes[[6]]
   print(c("Subtype:", subtype))
   
   # Select genes
-  X_subtype <- X_subtypes[[subtype]]
+  # X_subtype <- X_subtypes[[subtype]]
+  #-- OPTION: Hyperdiploid
+  X_subtype <- X[, not_pid_top3_2]
+  pid <- c(not_pid_top3_2, normal_pid)
+  print(colnames(X_subtype))
+  #--
   class_genes <- getLocalGenes(X_subtype, pid_remission)
   print(c("No. of selected genes = ", length(class_genes)))
   # list_drug_genes <- append(list_drug_genes, list(class_genes))
@@ -1236,7 +1250,8 @@ for (subtype in subtypes) {
   #          width = 10, height = 10)
   
   # Subtype and normal samples
-  subset_yeoh <- X[selected_genes, subset_pid] # OPTION!
+  subset_yeoh <- X[selected_genes, pid] # OPTION!
+  # subset_yeoh <- X[selected_genes, subset_pid] # OPTION!
   idx <- 1:(ncol(subset_yeoh)-3)
   response <- t(subset_yeoh)[idx,]
   normal <- t(subset_yeoh)[-idx,]
@@ -1250,7 +1265,7 @@ for (subtype in subtypes) {
                        "l2norm_d0_normal", "l2norm_d8_normal",
                        "l2norm_ratio1", "l2norm_ratio2", "l2norm_ratio3")
   
-  # # Plot heatmap
+  # # Plot heatmap of features
   # pheatmap(t(results[,subset_features]), col = brewer.pal(9, "Blues"),
   #          legend = T, border_color = "black", scale = "row",
   #          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
@@ -1266,8 +1281,15 @@ for (subtype in subtypes) {
   # ggsave(FEATURES_WPATH, features, width = 16, height = 10)
   
   # Plot
-  prediction_parallel <- plotPrediction(results, metadata_df)
-  PREDICTION_WPATH <- sprintf("~/Dropbox/temp/prediction_drug-%s.pdf", subtype)
+  prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
+  prediction_parallel
+  # TODO: Investigate
+  metadata_df[rownames(results), "label", drop=F]
+  results[order(results$l2norm_ratio2), "l2norm_ratio2", drop=F]
+  
+  # OPTION: Automatic filename
+  # PREDICTION_WPATH <- sprintf("~/Dropbox/temp/prediction_top-%s.pdf", subtype)
+  PREDICTION_WPATH <- "~/Dropbox/temp/prediction_not_top3_2-Hyperdiploid.pdf"
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 14, height = 7)
 }
 
@@ -1380,7 +1402,7 @@ for (subtype in subtypes) {
   # results <- calcERM(response, normal)
   # 
   # # Plot
-  # prediction_parallel <- plotPrediction(results, metadata_df)
+  # prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
   # PREDICTION_WPATH <- sprintf("dump/prediction_s5b2-%s.pdf", subtype)
   # ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
@@ -1488,7 +1510,7 @@ for (subtype in subtypes) {
   results <- calcERM(response, normal)
 
   # Plot
-  prediction_parallel <- plotPrediction(results, metadata_df)
+  prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("dump/prediction_subtype_ttest-%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
@@ -1583,7 +1605,7 @@ for (i in 2:7) {
   results <- calcERM(response, normal)
 
   # Plot
-  prediction_parallel <- plotPrediction(results, metadata_df)
+  prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("dump/prediction_intersect_ttest-%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
@@ -1753,7 +1775,7 @@ for (subtype in subtypes) {
   results <- calcERM(response, normal)
 
   # Plot
-  prediction_parallel <- plotPrediction(results, metadata_df)
+  prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("dump/prediction_qpsp_drug_wobatch-%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
@@ -1778,13 +1800,11 @@ save_fig(upset_plot, "dump/upset-selected_genes.pdf",
 subset_selected <- list_selected[-c(1,4)]
 intersect_genes <- Reduce(intersect, subset_selected)
 
-
-# Prediction (Drug genes) BCM ---------------------------------------------
+# Prediction (Batch genes) BCM --------------------------------------------
 batch <- metadata_df[colnames(data_yeoh), "batch_info"]
 metadata <- metadata_df[colnames(data_yeoh), 2:3]
 data_bcm <- correctMultiBCM(data_yeoh, batch, metadata, ref_batch = "2")
 
-# Prediction (Batch genes) BCM --------------------------------------------
 ## Batch genes
 # Only D0 samples
 pid_d0 <- rownames(metadata_df)[metadata_df$class_info == "D0"]
@@ -1829,43 +1849,43 @@ batch_genes <- names(aov_pvalue)[aov_pvalue < 0.05 & !is.na(aov_pvalue)]
 # kruskal_genes <- names(kruskal_pvalue)[kruskal_pvalue < 0.05 & !is.na(kruskal_pvalue)]
 length(batch_genes)
 
-### PLOTS ###
-X_batch <- data_bcm[batch_genes,]
-pheatmap(X_batch, col = brewer.pal(9, "Blues"),
-         legend = T, border_color = "black", scale = "none",
-         cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
-         show_colnames = F, show_rownames = F,
-         annotation_col = metadata_df)
-heatmap_batch <- recordPlot()
-save_fig(heatmap_batch, "dump/heatmap-batch_2565.pdf",
-         width = 10, height = 10)
+# ### PLOTS ###
+# X_batch <- data_bcm[batch_genes,]
+# pheatmap(X_batch, col = brewer.pal(9, "Blues"),
+#          legend = T, border_color = "black", scale = "none",
+#          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+#          show_colnames = F, show_rownames = F,
+#          annotation_col = metadata_df)
+# heatmap_batch <- recordPlot()
+# save_fig(heatmap_batch, "dump/heatmap-batch_2565.pdf",
+#          width = 10, height = 10)
+# 
+# table(metadata_df$batch_info, metadata_df$subtype)
+# 
+# list_batch_genes <- list(anova = batch_genes, welch = welch_genes,
+#                          kruskal = kruskal_genes)
+# 
+# upset(fromList(list_batch_genes),
+#       nsets = length(list_selected),
+#       nintersects = NA,
+#       order.by = "freq")
+# upset_plot <- recordPlot()
+# upset_plot
+# save_fig(upset_plot, "dump/upset-batch_genes.pdf",
+#          width = 8, height = 8)
+# 
+# ## Label genes
+# pid_d8 <- rownames(metadata_df)[metadata_df$class_info == "D8"]
+# pid_idx <- intersect(pid_d8, colnames(data_yeoh))
+# d8_yeoh <- data_yeoh[,pid_idx]
+# 
+# subtype_factor1 <- as.factor(metadata_df[colnames(d8_yeoh), "subtype"])
+# subtypes_d8 <- split.default(d8_yeoh, subtype_factor1, drop = F) # Split by subtype
+# 
+# plotPCA3DYeoh(data_bcm, metadata_df)
+# plotPCA3DYeoh(data_yeoh, metadata_df)
 
-table(metadata_df$batch_info, metadata_df$subtype)
-
-list_batch_genes <- list(anova = batch_genes, welch = welch_genes,
-                         kruskal = kruskal_genes)
-
-upset(fromList(list_batch_genes),
-      nsets = length(list_selected),
-      nintersects = NA,
-      order.by = "freq")
-upset_plot <- recordPlot()
-upset_plot
-save_fig(upset_plot, "dump/upset-batch_genes.pdf",
-         width = 8, height = 8)
-
-## Label genes
-pid_d8 <- rownames(metadata_df)[metadata_df$class_info == "D8"]
-pid_idx <- intersect(pid_d8, colnames(data_yeoh))
-d8_yeoh <- data_yeoh[,pid_idx]
-
-subtype_factor1 <- as.factor(metadata_df[colnames(d8_yeoh), "subtype"])
-subtypes_d8 <- split.default(d8_yeoh, subtype_factor1, drop = F) # Split by subtype
-
-plotPCA3DYeoh(data_bcm, metadata_df)
-plotPCA3DYeoh(data_yeoh, metadata_df)
-
-## Drug responsive genes
+# Prediction (Drug genes) BCM ---------------------------------------------
 # Nonlocals: pid_remission
 getLocalGenes <- function(X_subtype, pid_remission,
                           alpha = 0.05, EXPR = 6, N = 50, LOGFC = 1) {
@@ -1986,7 +2006,7 @@ for (subtype in subtypes) {
   #          legend = T, border_color = "black", scale = "row",
   #          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
   #          show_colnames = F, show_rownames = T,
-  #          annotation_col = metadata_df[, "label", drop = F])
+  #          annotation_col = metadata_df[,  "label", drop = F])
   # heatmap_class <- recordPlot()
   # HEATMAP_WPATH <- sprintf("dump/heatmap_features-%s.pdf", subtype)
   # save_fig(heatmap_class, HEATMAP_WPATH,
@@ -1997,7 +2017,7 @@ for (subtype in subtypes) {
   # ggsave(FEATURES_WPATH, features, width = 16, height = 10)
 
   # Plot
-  prediction_parallel <- plotPrediction(results, metadata_df)
+  prediction_parallel <- plotPrediction(results, metadata_df, yeoh_label)
   PREDICTION_WPATH <- sprintf("~/Dropbox/temp/prediction_bcm_drug-%s.pdf", subtype)
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 12, height = 7)
 }
@@ -2021,3 +2041,296 @@ save_fig(upset_plot, "dump/upset-selected_genes.pdf",
 # Subset of intersected genes
 subset_selected <- list_selected[-c(1,4)]
 intersect_genes <- Reduce(intersect, subset_selected)
+
+# Hyperdiploid classification ---------------------------------------------
+## Plot: Sum of expression
+# Normalised: D0 data
+idx_d0 <- metadata_df[colnames(data_yeoh), "class_info"] == "D0"
+sum_d0 <- colSums(data_yeoh)[idx_d0]
+
+D <- data.frame(subtype = metadata_df[names(sum_d0), "subtype"],
+                value = sum_d0)
+features_plot <- ggplot(D, aes(as.factor(subtype), value, colour = subtype)) +
+  geom_point(position = position_jitter(width=.1, height=0), cex = 2, show.legend = F) + # position = position_jitterdodge()
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 20, vjust = 0.5))
+ggsave("~/Dropbox/temp/colsum-scaled.pdf", features_plot,
+       width = 6, height = 5)
+
+# Raw: D0 data
+selected_raw <- removeProbesets(raw_yeoh)
+unnorm_raw <- log2_transform(filterProbesets(selected_raw, 0.7, metadata_df))
+sum_raw_d0 <- colSums(unnorm_raw)[idx_d0]
+
+D1 <- data.frame(subtype = metadata_df[names(sum_raw_d0), "subtype"],
+                 value = sum_raw_d0)
+features_plot1 <- ggplot(D1, aes(as.factor(subtype), value, colour = subtype)) +
+  geom_point(position = position_jitter(width=.1, height=0), cex = 2, show.legend = F) + # position = position_jitterdodge()
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 20, vjust = 0.5))
+ggsave("~/Dropbox/temp/colsum-unnorm.pdf", features_plot1,
+       width = 6, height = 5)
+
+## Annotation: Chr location
+ANNOT_RPATH <- "../info/microarray/HG-U133_Plus_2/affy/HG-U133_Plus_2.na35.annot.csv"
+annot <- read.csv(ANNOT_RPATH,  row.names = 1, comment.char = "#")
+
+idx_hyp <- metadata_df[colnames(data_yeoh), "subtype"] %in% c("Hyperdiploid", "Normal") & 
+  metadata_df[colnames(data_yeoh), "class_info"] %in% c("D0", "N")
+hyperdiploid <- data_yeoh[,idx_hyp]
+
+ps_chrloc <- annot[rownames(data_yeoh), "Chromosomal.Location"]
+ps_chr <- sub("(chr.*?)(p|q|c).*", "\\1", ps_chrloc)
+ps_chr[ps_chr == "---"] <- NA
+
+## Un-normalised data
+idx <- metadata_df[colnames(data_yeoh), "subtype"] %in% c("Hyperdiploid", "Normal") & 
+  metadata_df[colnames(data_yeoh), "class_info"] %in% c("D0", "N")
+hyp_raw <- unnorm_raw[,idx]
+ps_chrloc1 <- annot[rownames(hyp_raw), "Chromosomal.Location"]
+ps_chr1 <- sub("(chr.*?)(p|q|c).*", "\\1", ps_chrloc1)
+ps_chr1[ps_chr1 == "---"] <- NA
+list_chr_hypdip1 <- split.data.frame(hyp_raw, ps_chr1)
+hypdip_chr_mean1 <- t(sapply(list_chr_hypdip1, colMeans))
+hypdip_no_chrY1 <- hypdip_chr_mean1[1:23,]
+
+## Hyperdiploid D0: Split into chr
+list_chr_hypdip <- split.data.frame(hyperdiploid, ps_chr)
+hypdip_chr_mean <- t(sapply(list_chr_hypdip, colMeans))
+hypdip_no_chrY <- hypdip_chr_mean[1:23,]
+
+## Ranks
+hypdip_rank <- apply(hyperdiploid, 2, rank, ties.method = "min")
+list_chr_rank <- split.data.frame(hypdip_rank, ps_chr)
+hypdip_chr_rank <- t(sapply(list_chr_rank, colMeans))
+hypdip_rank_no_chrY <- hypdip_chr_rank[1:23,]
+
+# Entire dataset
+list_chr <- split.data.frame(data_yeoh, ps_chr)
+chr_mean <- t(sapply(list_chr, colMeans))
+
+# Plot
+pheatmap(hypdip_no_chrY, col = brewer.pal(9, "Blues"),
+         legend = T, border_color = NA, scale = "none",
+         cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+         show_colnames = F, show_rownames = T,
+         annotation_col = metadata_df)
+heatmap <- recordPlot()
+save_fig(heatmap, "~/Dropbox/temp/heatmap_none-hypdip_rank_no_chrY.pdf",
+         width = 7, height = 6)
+
+## Plot scaled data
+long_no_chrY <- melt(hypdip_no_chrY, varnames = c("chr", "pid"))
+long_no_chrY$chr <- factor(long_no_chrY$chr,
+                           levels = levels(long_no_chrY$chr)[
+                             c(1,12,16:22,2:11,13:15,23)])
+# Plot pid facet
+chr_jitter1 <- ggplot(long_no_chrY[1:(20*23),], aes(chr, value)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 5,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+chr_jitter2 <- ggplot(long_no_chrY[(20*23+1):943,], aes(chr, value)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 6,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+ggsave("~/Dropbox/temp/jitter-chr2.pdf", chr_jitter2,
+       width = 16, height = 10)
+
+# Plot batch effects
+long_batch <- cbind(long_no_chrY,
+                    batch = metadata_df[long_no_chrY$pid, "batch_info"])
+jitter_batch <- ggplot(long_batch, aes(pid, value, colour=pid)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_grid(~batch, scales = "free", space = "free") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+ggsave("~/Dropbox/temp/jitter_batch-scaled.pdf", jitter_batch,
+       width = 16, height = 10)
+
+## Plot: Raw data
+long_no_chrY1 <- melt(hypdip_no_chrY1, varnames = c("chr", "pid"))
+long_no_chrY1$chr <- factor(long_no_chrY1$chr,
+                            levels = levels(long_no_chrY1$chr)[
+                              c(1,12,16:22,2:11,13:15,23)])
+# Plot pid facet
+chr_jitter3 <- ggplot(long_no_chrY1[1:(20*23),], aes(chr, value)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 5,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+chr_jitter4 <- ggplot(long_no_chrY1[(20*23+1):943,], aes(chr, value)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 6,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+chr_jitter3
+ggsave("~/Dropbox/temp/jitter-chr2.pdf", chr_jitter2,
+       width = 16, height = 10)
+
+# Plot batch
+long_batch1 <- cbind(long_no_chrY1,
+                    batch = metadata_df[long_no_chrY$pid, "batch_info"])
+jitter_batch1 <- ggplot(long_batch1, aes(pid, value, colour=pid)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_grid(~batch, scales = "free", space = "free") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+ggsave("~/Dropbox/temp/jitter_batch-raw.pdf", jitter_batch1,
+       width = 16, height = 10)
+
+## TODO: Other methods of consolidating chr info aside from colMean?
+
+## Rank within patient
+rank_chr_mean <- apply(-hypdip_no_chrY, 2, rank)
+print(rank_chr_mean)
+
+# Rank: Mean and sd
+chr_rank_sd <- apply(rank_chr_mean, 1, sd)
+chr_rank_mean <- rowMeans(rank_chr_mean)
+chr_rank_mean
+chr_rank_sd
+plot(chr_rank_mean, chr_rank_sd,
+     xlim = c(0,25), ylim = c(0,6),
+     xlab = "Mean", ylab = "SD", main = "Chromosome ranks")
+text(chr_rank_mean+.8, chr_rank_sd+.15,
+     names(chr_rank_mean), cex = .8)
+rank_mean_sd <- recordPlot()
+save_fig(rank_mean_sd, "~/Dropbox/temp/rank_scatter-chr.pdf",
+         width = 7, height = 8)
+
+# Values across samples may be affected by batch effects
+# Create relative values that remain constant
+# Relative to a basket of chr 1, 7, 9, 16
+mean_ref <- colMeans(hypdip_no_chrY[c(1,20,22,8),])
+
+ratio_within <- sweep(hypdip_no_chrY, 2, mean_ref, "/")
+long_ratio <- melt(ratio_within, varnames = c("chr", "pid"))
+long_ratio$chr <- factor(long_ratio$chr,
+                         levels = levels(long_ratio$chr)[
+                           c(1,12,16:22,2:11,13:15,23)])
+ratio_jitter1 <- ggplot(long_ratio[1:(20*23),], aes(chr, value)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 5,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+ratio_jitter2 <- ggplot(long_ratio[(20*23+1):943,], aes(chr, value)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 6,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5))
+ggsave("~/Dropbox/temp/jitter-ratio1.pdf", ratio_jitter1,
+       width = 16, height = 10)
+ratio_jitter1
+
+# Manual identification
+# Rank without chrX
+ranked_chr <- apply(-ratio_within[1:22,], 2, function(x) names(sort(x)))
+top_5 <- ranked_chr[1:5,]
+
+# Subset patients
+idx <- colSums(ratio_within > 1.1) >= 5 # pid
+list_top5 <- as.list(data.frame(top_5[,idx]))
+lit_chr <- c("chr4", "chr6", "chr10", "chr14", "chr17",
+             "chr18", "chr20", "chr21", "chrX")
+idx1 <- sapply(list_top5, function(x) all(x %in% lit_chr))
+selected_list_top5 <- list_top5[idx1]
+sort_top5 <- lapply(selected_list_top5, sort)
+paste_chr5 <- sapply(sort_top5, function(vec) do.call(paste0, as.list(vec)))
+table(paste_chr5)
+d0_top5 <- names(paste_chr5)[paste_chr5 == "chr14chr17chr18chr21chr6"]
+d8_top5 <- paste0(substring(d0_top5, 1, 6), "8")
+pid_top5 <- c(d0_top5, d8_top5)
+
+# Unique top 3 chr
+top_3 <- ranked_chr[1:3,]
+list_top3 <- as.list(data.frame(top_3))
+idx_lit3 <- sapply(list_top3, function(x) all(x %in% lit_chr))
+selected_top3 <- list_top3[idx_lit3]
+sort_top3 <- lapply(selected_top3, sort)
+paste_chr3 <- sapply(sort_top3, function(vec) do.call(paste0, as.list(vec)))
+table(paste_chr3)
+d0_top3 <- names(paste_chr3)[paste_chr3 == "chr14chr18chr21"]
+d8_top3 <- paste0(substring(d0_top3, 1, 6), "8")
+pid_top3 <- c(d0_top3, d8_top3)
+pid_top3
+
+# All top 3 chr have to be in literature
+d0_top3_1 <- names(selected_top3)
+d8_top3_1 <- paste0(substring(d0_top3_1, 1, 6), "8")
+pid_top3_1 <- c(d0_top3_1, d8_top3_1)
+not_d0_top3_1 <- setdiff(colnames(hyperdiploid),
+                         c(d0_top3_1, normal_pid))
+not_d8_top3_1 <- paste0(substring(not_d0_top3_1, 1, 6), "8")
+not_pid_top3_1 <- c(not_d0_top3_1, not_d8_top3_1)
+
+# Top 3 have to be in special set
+set_popular <- paste0("chr", c(6,14,17,18,21))
+logi_idx <- apply(top_3, 2, function(x) sum(x %in% set_popular) == 3)
+d0_top3_2 <- colnames(top_3)[logi_idx]
+d8_top3_2 <- paste0(substring(d0_top3_2, 1, 6), "8")
+pid_top3_2 <- c(d0_top3_2, d8_top3_2)
+not_d0_top3_2 <- setdiff(colnames(hyperdiploid),
+                         c(d0_top3_2, normal_pid))
+not_d8_top3_2 <- paste0(substring(not_d0_top3_2, 1, 6), "8")
+not_pid_top3_2 <- c(not_d0_top3_2, not_d8_top3_2)
+
+# Special set of chr {6,14,17,18,21} if 3 are present in top 5
+set_popular <- paste0("chr", c(6,14,17,18,21))
+logi_idx <- apply(top_5, 2, function(x) sum(x %in% set_popular) >= 4)
+pid_popular <- colnames(top_5)[logi_idx]
+pid_unpopular <- setdiff(colnames(top_5), pid_popular)
+pid_unpopular
+top_5[,pid_unpopular]
+
+# Investigate top ratios: No pattern
+sorted_ratio <- apply(ratio_within, 2, sort, decreasing=TRUE)
+sorted_ratio[1:3, d0_top3_1]
+sorted_ratio[1:3, not_d0_top3_1]
+top_5
+
+colnames(hyperdiploid)
+
+# Unique top 2 chr
+top_2 <- ranked_chr[1:2,]
+list_top2 <- as.list(data.frame(top_2))
+idx_lit2 <- sapply(list_top2, function(x) all(x %in% lit_chr))
+selected_top2 <- list_top2[idx_lit2]
+sort_top2 <- lapply(selected_top2, sort)
+paste_chr2 <- sapply(sort_top2, function(vec) do.call(paste0, as.list(vec)))
+table(paste_chr2)
+d0_top2 <- names(paste_chr2)[paste_chr2 == "chr14chr18chr21"]
+d8_top2 <- paste0(substring(d0_top2, 1, 6), "8")
+pid_top2 <- c(d0_top2, d8_top2)
+pid_top2
+
+# Patients with at least 3 chr >1.1
+idx1 <- colSums(ratio_within > 1.1) >= 3
+d0_small <- colnames(ratio_within)[idx1]
+d8_small <- paste0(substring(d0_small, 1, 6), "8")
+pid_small <- c(d0_small, d8_small)
+
+# Patients with at least 1 chr >1.2
+idx2 <- colSums(ratio_within > 1.2) >= 1
+d0_big <- colnames(ratio_within)[idx2]
+d8_big <- paste0(substring(d0_big, 1, 6), "8")
+pid_big <- c(d0_big, d8_big)
+
+# Batch effect correction
+
+# Plot PCA
+plotPCA3DYeoh(hyperdiploid, metadata_df)
+plotPCA3DYeoh(hypdip_no_chrY, metadata_df)
+sort(table(ps_chr))
+
+i <- 2
+hist(list_chr_hypdip[[i]][,2], breaks = 30)

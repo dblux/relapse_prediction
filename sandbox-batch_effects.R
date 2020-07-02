@@ -1,4 +1,4 @@
-library(Biocomb)
+# library(Biocomb)
 
 library(reshape2)
 library(rgl)
@@ -12,9 +12,9 @@ library(pheatmap)
 # library(dendextend)
 # library(cluster)
 
-library(sva)  # ComBat
-library(scran)  # MNN
-library(Harman)
+# library(sva)  # ComBat
+# library(scran)  # MNN
+# library(Harman)
 
 # library(xtable)
 # library(gPCA)
@@ -22,7 +22,7 @@ library(Harman)
 source("../functions.R")
 source("bin/bcm.R")
 
-# theme_set(theme_dark())
+theme_set(theme_dark())
 # theme_set(theme_gray())
 theme_set(theme_cowplot())
 
@@ -162,50 +162,40 @@ calcERM <- function(response_df, normal_df, labels_df) {
   return(results_df)
 }
 
-# 3D PCA plot
-plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
-                      ratio_list = list(2,1,1)) {
-  if (is.null(pc_labels)) {
-    print("PCA performed!")
-    pca_obj <- prcomp(t(df), center = T, scale. = F)
-    pca_df <- as.data.frame(pca_obj$x[,1:3])
-    eigenvalues <- (pca_obj$sdev)^2
-    var_pc <- eigenvalues[1:3]/sum(eigenvalues)
-    print(var_pc)
-    pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
-  } else {
-    print("No PCA performed!")
-    pca_df <- as.data.frame(df)
-  }
+# Plot PCA 3D: Batch effects
+# Plot batches in different colours and classes in different shapes
+plotPCA3DBatchEffects <- function(df1, metadata_df) {
+  # Batch and class annotations
+  batch_factor <- metadata_df[colnames(df1), "batch"]
+  batch_palette <- generateGgplotColours(length(unique(batch_factor)))
+  batch_colour <- batch_palette[batch_factor]
   
-  # RGL plot parameters
-  rgl.open()
-  rgl.bg(color="white")
-  rgl.viewpoint(zoom = 0.8)
-  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
-  par3d(windowRect = c(50, 20, 500, 500))
-  with(pca_df, pch3d(PC1, PC2, PC3, bg = colour,
-                     pch = pch, cex = 0.5, lwd = 1.5))
-  box3d(col = "black")
-  title3d(xlab = pc_labels[1], ylab = pc_labels[2],
-          zlab = pc_labels[3], col = "black")
-  # Plot aspect ratios of axis according to variance
-  do.call(aspect3d, ratio_list)
+  class_factor <- metadata_df[colnames(df1), "celltype"]
+  all_pch <- 21:24 # TODO: See number of batches and celltypes
+  # Error if there are more classes than pch symbols (> 5)
+  stopifnot(length(unique(class_factor)) <= 5)
+  class_pch <- all_pch[class_factor]
+  plotPCA3D(df1, batch_colour, class_pch)
 }
 
-# Plot PCA before selecting features
-# Batch information of all the timepoints
-plotPCA3DYeoh <- function(df1, metadata_df) {
-  batch_info <- metadata_df[colnames(df1), "batch_info"]
-  generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-  batch_palette <- generate_colour(10)
-  # batch_palette <- brewer.pal(10, "Set3")
-  batch_colour <- batch_palette[batch_info]
-  # Shape of all timepoints
-  class_info <- metadata_df[colnames(df1), "class_info"]
-  levels(class_info) <- 21:23
-  timepoint_shape <- as.numeric(as.character(class_info))
-  plotPCA3D(df1, batch_colour, timepoint_shape)
+plotHeatmapSubtype <- function(X, metadata_df) {
+  subtype_factor <-  [colnames(X), "subtype"]
+  set3_pal <- brewer.pal(9, "Set3")
+  subtype_col <- set3_pal[subtype_factor]
+  
+  par(mar = c(1,1,1,1))
+  heatmap(data.matrix(X),
+          col = brewer.pal(9, "Blues"),
+          ColSideColors = subtype_col,
+          scale = "none",
+          labRow = NA, labCol = NA)
+  
+  legend(x = -.04, y = 1350, legend = levels(subtype_factor),
+         col = set3_pal[factor(levels(subtype_factor))],
+         pch = 15, cex = .7)
+  heatmap_subtype <- recordPlot()
+  par(mar = c(5.1, 4.1, 4.1, 2.1)) # Reset to defaults
+  return(heatmap_subtype)
 }
 
 # IMPORT DATA -------------------------------------------------------------
@@ -239,3 +229,101 @@ meta_b1b2<- metadata_df[
 
 list_batch <- split(meta_b1b2, meta_b1b2$batch_info)
 lapply(list_batch, unique)
+
+# Dataset 1 ---------------------------------------------------------------
+library(Rtsne)
+
+DATA1_WPATH <- "../scrna_seq/data/tran_2020/dataset1/dataset1_sm_uc3.txt"
+META1_WPATH <- "../scrna_seq/data/tran_2020/dataset1/sample_sm_uc3.txt"
+raw1 <- read.table(DATA1_WPATH, header = T, sep = "\t")
+meta1 <- read.table(META1_WPATH, header = T, sep = "\t")
+
+# Filter probes with too many zeros
+#' @param df dataframe
+#' @param percent_threshold percentage threshold of non-zero values
+#' @param metadata_df df containing class labels of samples
+#' @param logical_func a function that is either "all" or "any". (Either all or
+#' just one class have to pass the threshold)
+#' @return dataframe containing rows that meet threshold of non-zero
+#' values
+filterSparseRows <- function(df1, percent_threshold, metadata_df = NULL,
+                            logical_func = any) {
+  if (is.null(metadata_df)) {
+    logical_df <- df1 != 0
+    selected_logvec <- rowSums(logical_df) > percent_threshold * ncol(df1)
+    print(paste("No. of probesets removed =",
+                nrow(df1) - sum(selected_logvec)))
+    return(df1[selected_logvec,])
+  } else {
+    class_factor <- metadata_df[colnames(df1), "celltype"]
+    logical_df <- data.frame(df1 != 0)
+    list_logical_df <- split.default(logical_df, class_factor)
+    list_logvec <- lapply(
+      list_logical_df,
+      function(df1) rowSums(df1) > (percent_threshold * ncol(df1))
+    )
+    combined_log_df <- do.call(cbind,list_logvec)
+    print(head(combined_log_df))
+    selected_logvec <- apply(combined_log_df, 1, logical_func)
+    # selected_logvec <- do.call(mapply, c(logical_func, list_logvec))
+    print(paste("No. of probesets removed =",
+                nrow(df1) - sum(selected_logvec)))
+    return(df1[selected_logvec,])
+  }
+}
+filtered1 <- filterSparseRows(raw1, 0.5, meta1)
+log1 <- log2_transform(filtered1)
+log1[log1 < 0] <- 0
+
+# Plot - Individual feature
+i <- 83
+D <- data.frame(value = t(log1[i,]),
+                celltype = meta1[colnames(log1), "celltype"],
+                batch = meta1[colnames(log1), "batch"])
+colnames(D)[1] <- "value"
+single_gene <- ggplot(D, aes(x=celltype, y=value, colour=batch)) +
+  geom_point(position = position_jitterdodge(), cex=3, show.legend = F)
+ggsave("~/Dropbox/temp/tran1-single_gene.pdf", single_gene,
+       width = 8, height = 5)
+
+# Plot uncorrected data
+set.seed(0)
+log1_tsne_obj <- Rtsne(t(log1), perplexity = 30, theta = 0.0)
+log1_tsne <- data.frame(log1_tsne_obj$Y,
+                        celltype = meta1[colnames(log1), "celltype"],
+                        batch = meta1[colnames(log1), "batch"])
+colnames(log1_tsne)[1:2] <- c("TSNE1", "TSNE2")
+tsne_filtered <- ggplot(log1_tsne, aes(x=TSNE1, y=TSNE2, colour=celltype, pch=batch)) +
+  geom_point(cex=3, alpha = .7, show.legend = F) +
+  scale_shape_manual(values=15:19)
+ggsave("~/Dropbox/temp/tran1-tsne_log.pdf", tsne_filtered,
+       width = 6, height = 6)
+
+log1_pca_obj <- prcomp(t(log1))
+log1_pca <- data.frame(log1_pca_obj$x[,1:2],
+                       celltype = meta1[colnames(log1), "celltype"],
+                       batch = meta1[colnames(log1), "batch"])
+
+ggplot(log1_pca, aes(x=PC1, y=PC2, colour=celltype, pch=batch)) +
+  geom_point(cex=3, alpha = .7, show.legend = F) +
+  scale_shape_manual(values=15:19)
+
+# Batch correction
+batch1 <- meta1[colnames(log1), "batch"]
+class1 <- meta1[colnames(log1), "celltype", drop=F]
+
+bcm1 <- correctMultiBCM(log1, batch1, class1, ref_batch = "Batch1")
+
+# Plots
+set.seed(0)
+bcm1_tsne_obj <- Rtsne(t(bcm1), perplexity = 30, theta = 0.0)
+bcm1_tsne <- data.frame(bcm1_tsne_obj$Y,
+                        celltype = meta1[colnames(bcm1), "celltype"],
+                        batch = meta1[colnames(bcm1), "batch"])
+colnames(bcm1_tsne)[1:2] <- c("TSNE1", "TSNE2")
+tsne_bcm1 <- ggplot(bcm1_tsne, aes(x=TSNE1, y=TSNE2, colour=celltype, pch=batch)) +
+  geom_point(cex=3, alpha=.7, show.legend = F) +
+  scale_shape_manual(values=15:19)
+tsne_bcm1
+ggsave("~/Dropbox/temp/tran1-tsne_bcm.pdf", tsne_bcm1,
+       width = 6, height = 6)

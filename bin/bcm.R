@@ -430,6 +430,11 @@ correctSVDBCM <- function(df1, metadata_df, ref_batch) {
 
 
 # SANDBOX -----------------------------------------------------------------
+library(igraph)
+# library(pheatmap)
+library(RColorBrewer)
+library(ggplot2)
+library(rgl)
 source("../functions.R")
 
 ## Subset of original data
@@ -454,14 +459,11 @@ data_yeoh <- log2_transform(filterProbesets(subset_yeoh, 0.7, metadata_df))
 
 # table(metadata_df$batch_info, metadata_df$subtype)
 
-library(Rgraphviz)
-library(igraph)
-
 #' @param X dataframe of gene expression data
 #' @param batch vector indicating batch
 #' @param metadata dataframe with columns encoding relevant class information
 correctMultiBCM <- function(X, batch, metadata, ref_batch, size = 3,
-                            n_outlier = 2)
+                            n_outlier = 1)
 {
   ## Assert no negative values
   if (sum(X < 0) > 0) stop("Negative values present in X..")
@@ -473,7 +475,7 @@ correctMultiBCM <- function(X, batch, metadata, ref_batch, size = 3,
                                   lapply(metadata, as.character),
                                   row.names = rownames(metadata),
                                   stringsAsFactors = F)
-  metadata <- complete_metadata[,2:ncol(complete_metadata)]
+  metadata <- complete_metadata[,2:ncol(complete_metadata), drop = F]
   
   ## Check that batches share at least one category (graph is fully connected)
   ## Create G = (V: Batches, E: Common categories)
@@ -511,6 +513,8 @@ correctMultiBCM <- function(X, batch, metadata, ref_batch, size = 3,
   # Define first reference batch and list of other df
   X_ref <- list_batches[[ref_batch]]
   list_X_other <- list_batches[names(list_batches) != ref_batch]
+  print("Class of list_X_other:")
+  print(class(list_X_other))
   
   #' Recursive function that selects batches with shared class with 
   #' reference batch and corrects accordingly returning corrected data
@@ -559,9 +563,9 @@ correctMultiBCM <- function(X, batch, metadata, ref_batch, size = 3,
       # Global: Variables belonging to ref_batch, G, metadata
       single_correction <- function(batch_name, list_batches) {
         print(sprintf("Batch %s", batch_name))
-        X <- list_batches[[batch_name]]
+        X_other <- list_batches[[batch_name]]
         # Split by combinations
-        list_combi <- split.default(X, metadata[colnames(X),],
+        list_combi <- split.default(X_other, metadata[colnames(X_other),],
                                     drop = T, sep = "_")
         # Filter intersecting classes with reference batch
         intersecting_edges <- E(G)[ref_batch %--% batch_name]
@@ -579,59 +583,77 @@ correctMultiBCM <- function(X, batch, metadata, ref_batch, size = 3,
         #' Calculate correction vectors for a single intersecting combination
         #' Global: sublist_ref_tiered
         calcCorrection <- function(combi_name, other_tiered, ref_tiered) {
-          X_ref <- ref_tiered[[combi_name]]
-          X_other <- other_tiered[[combi_name]]
+          X1_ref <- ref_tiered[[combi_name]]
+          X1_other <- other_tiered[[combi_name]]
           
           # Initialise correction vector
-          correction_vector <- rep(0, nrow(X_ref))
-          names(correction_vector) <- rownames(X_ref)
+          correction_df <- data.frame(matrix(0, nrow(X1_ref), 2))
+          rownames(correction_df) <- rownames(X1_ref)
+          colnames(correction_df) <- c("big", "small")
           
           ## Calculate zero - non-zero correction
-          ref_allzero <- X_ref$n_positive == 0 # No positive samples
-          ref_allpositive <- X_ref$n_zero == 0 # Non zero samples
-          other_allzero <- X_other$n_positive == 0 # No positive samples
-          other_allpositive <- X_other$n_zero == 0 # Non zero samples
+          ref_allzero <- X1_ref$n_positive <= n_outlier # Almost all zeros
+          ref_allpositive <- X1_ref$n_zero <= n_outlier # Almost all positives
+          other_allzero <- X1_other$n_positive <= n_outlier # Almost all zeros
+          other_allpositive <- X1_other$n_zero <= n_outlier # Non zero samples
           
-          correction_vector[ref_allzero & other_allpositive] <- 
-            -X_other$mean_positive[ref_allzero & other_allpositive]
-          correction_vector[other_allzero & ref_allpositive] <- 
-            X_ref$mean_positive[other_allzero & ref_allpositive]
-          big_correction <-
+          correction_df[ref_allzero & other_allpositive, 1] <- 
+            X1_other$mean_positive[ref_allzero & other_allpositive]
+          correction_df[other_allzero & ref_allpositive, 1] <- 
+            -X1_ref$mean_positive[other_allzero & ref_allpositive]
+          idx_big <-
             (other_allzero & ref_allpositive)|(ref_allzero & other_allpositive)
           print(sprintf("No. of features with big correction = %d",
-                        sum(big_correction)))
+                        sum(idx_big)))
           
           ## Calculate non-zero - non-zero correction
-          ref_positive <- X_ref$n_positive > n_outlier
-          other_positive <- X_other$n_positive > n_outlier
+          ref_positive <- X1_ref$n_positive > n_outlier
+          other_positive <- X1_other$n_positive > n_outlier
           logi_idx <- ref_positive & other_positive
-          correction_vector[logi_idx] <-
-            X_other$mean_positive[logi_idx] - X_ref$mean_positive[logi_idx]
+          correction_df[logi_idx, 2] <-
+            X1_other$mean_positive[logi_idx] - X1_ref$mean_positive[logi_idx]
+          print(sprintf("No. of features with small correction = %d",
+                        sum(logi_idx)))
           
           # Check if both logi_idx overlap
-          stopifnot(sum(which(big_correction) %in% which(logi_idx)) == 0)
-          return(correction_vector)
+          stopifnot(sum(which(idx_big) %in% which(logi_idx)) == 0)
+          return(correction_df)
         }
         # Calculates correction vectors for all combinations
-        correction_df <- data.frame(
-          sapply(names(sublist_combi_tiered),
-                 calcCorrection,
-                 sublist_combi_tiered,
-                 sublist_ref_tiered)
-        )
-        CORRECTION_WPATH <- sprintf("temp/correction-%s.tsv", batch_name)
-        write.table(correction_df, CORRECTION_WPATH, sep = "\t")
+        correction <- sapply(names(sublist_combi_tiered),
+                             calcCorrection,
+                             sublist_combi_tiered,
+                             sublist_ref_tiered)
         
-        correction_vector <- apply(correction_df, 1, median)
-        X_corrected <- X - correction_vector
+        # CORRECTION_WPATH <- sprintf("temp/correction-%s.rds", batch_name)
+        # saveRDS(correction, CORRECTION_WPATH)
+        
+        # Single correction value is sufficient to trigger correction
+        big_df <- data.frame(correction[1,])
+        small_df <- data.frame(correction[2,])
+        big_df[big_df == 0] <- NA
+        small_df[small_df == 0] <- NA
+        big_vector <- apply(big_df, 1, mean,  na.rm = T) # mean of big
+        small_vector <- apply(small_df, 1, mean, na.rm = T) # mean of small
+        
+        X_big <- matrix(big_vector, length(big_vector), ncol(X_other))
+        X_small <- matrix(small_vector, length(small_vector), ncol(X_other))
+        idx_big_neg <- X_other == 0 & (!is.na(X_big) & X_big < 0)
+        idx_big_pos <- X_other != 0 & (!is.na(X_big) & X_big > 0)
+        idx_small <- X_other != 0 & !is.na(X_small) & !(!is.na(X_big) & X_big > 0)
+        X_other[idx_big_neg] <- -X_big[idx_big_neg]
+        X_other[idx_small] <- X_other[idx_small] - X_small[idx_small]
+        X_other[idx_big_pos] <- X_other[idx_big_pos] - X_big[idx_big_pos]
+        
         # Replace all negative values with 0
-        X_corrected[X_corrected < 0] <- 0
-        return(X_corrected)
+        X_other[X_other < 0] <- 0
+        return(X_other)
       }
       
       list_X_corrected <- lapply(names(list_intersect_batches),
                                  single_correction,
                                  list_intersect_batches)
+      
       # Corrected df contains all samples
       X_concat <- cbind(ref_df, do.call(cbind, list_X_corrected))
       # Replace all negative values with 0
@@ -661,14 +683,143 @@ correctMultiBCM <- function(X, batch, metadata, ref_batch, size = 3,
   return(X_final[,colnames(X)]) # Sort columns according to X
 }
 
-batch <- metadata_df[colnames(data_yeoh), "batch_info"]
-metadata <- metadata_df[colnames(data_yeoh), 2:3]
-data_bcm <- correctMultiBCM(data_yeoh, batch, metadata, ref_batch = "2")
-
-correction_1 <- read.table("temp/correction-1.tsv", sep = "\t")
-head(correction_1, 30)
-hist(correction_1[,4], breaks = 30)
-logi_df <- abs(correction_1) > 4
-idx <- rownames(logi_df)[apply(logi_df, 1, any)]
-correction_1[idx,]
-
+if (!interactive()) {
+  batch <- metadata_df[colnames(data_yeoh), "batch_info"]
+  metadata <- metadata_df[colnames(data_yeoh), 2:3]
+  data_bcm <- correctMultiBCM(data_yeoh, batch, metadata, ref_batch = "2")
+  
+  plotPCA3DYeoh(data_bcm, metadata_df)
+  rgl.postscript("~/Dropbox/temp/pca_3d-bcm_multi.pdf", "pdf")
+  
+  data_yeoh_tsne_obj <- Rtsne(t(data_bcm), perplexity = 20, theta = 0.0)
+  bcm_yeoh_tsne <- data.frame(data_yeoh_tsne_obj$Y,
+                              class = metadata_df[colnames(data_yeoh), "class_info"],
+                              batch = metadata_df[colnames(data_yeoh), "batch_info"])
+  colnames(bcm_yeoh_tsne)[1:2] <- c("TSNE1", "TSNE2")
+  tsne_bcm <- ggplot(bcm_yeoh_tsne, aes(x=TSNE1, y=TSNE2,
+                                        colour=batch, pch=class)) +
+    geom_point(cex=4, alpha=.7, show.legend = F) +
+    scale_shape_manual(values=15:19)
+  tsne_bcm
+  
+  # Investigate correction vectors ------------------------------------------
+  list_paths <- list.files("temp", pattern = "correction.*?",
+                           full.names = TRUE)
+  list_correction <- lapply(list_paths, readRDS)
+  
+  
+  ## Big correction
+  for (correction in list_correction) {
+    logi_df <- abs(correction[,1:(ncol(correction)-1)]) > 4
+    print(table(rowSums(logi_df)))
+  }
+  
+  lapply(list_correction, ncol)
+  
+  logi_df <- abs(list_correction[[1]][,1:4]) > 4
+  genes <- rownames(logi_df)[rowSums(logi_df) == 2]
+  
+  # for (i in 1:20) {
+  #   print(correction_1[row_idx[i],])
+  #   # plot(1:length(pid_idx), data_yeoh[row_idx[i], pid_idx],
+  #   #      pch = batch1 + 15, col = subtype1)
+  #   plot(1:ncol(data_yeoh), data_yeoh[row_idx[i],],
+  #        col = metadata_df[colnames(data_yeoh), "batch_info"])
+  #   readline()
+  # }
+  # 
+  # ## Plot full data
+  # col_palette <- brewer.pal(10, "Set3")
+  # # Full data
+  # plot(1:ncol(data_yeoh), data_yeoh["214250_at",], pch = 19,
+  #      col = col_palette[metadata_df[colnames(data_yeoh), "batch_info"]])
+  
+  ## PLOT SINGLE GENE
+  idx <- rownames(metadata_df) %in% colnames(data_yeoh) &
+    (metadata_df$batch_info == 2 | metadata_df$batch_info == 1) # &
+  # (metadata_df$subtype == "Others" | metadata_df$subtype == "TEL-AML1")
+  pid_idx <- rownames(metadata_df)[idx]
+  batch1 <- metadata_df[pid_idx, "batch_info"]
+  subtype1 <- metadata_df[pid_idx, "subtype"]
+  
+  combination <- paste(metadata_df[pid_idx, "class_info"],
+                       metadata_df[pid_idx, "subtype"],
+                       sep = "_")
+  
+  # Uncorrected data
+  i <- 7
+  print(list_correction[[1]][genes[i],])
+  D <- data.frame(batch_info = metadata_df[pid_idx, "batch_info"],
+                  combination,
+                  value = t(data_yeoh[genes[i], pid_idx]))
+  colnames(D)[3] <- "value"
+  
+  features_plot <- ggplot(D) +
+    geom_point(aes(as.factor(combination), value, colour = as.factor(batch_info)),
+               position = position_jitterdodge(), cex = 2,
+               show.legend = F) +
+    # facet_wrap(~as.factor(class_info), ncol = 2, scales = "free") +
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_text(angle = 20, vjust = 0.5))
+  features_plot
+  
+  # Corrected data
+  i <- 13
+  print(list_correction[[1]][genes[i],])
+  D <- data.frame(batch_info = metadata_df[pid_idx, "batch_info"],
+                  combination,
+                  value = t(data_bcm[genes[i], pid_idx]))
+  colnames(D)[3] <- "value"
+  
+  features_plot <- ggplot(D) +
+    geom_point(aes(as.factor(combination), value, colour = as.factor(batch_info)),
+               position = position_jitterdodge(), cex = 2,
+               show.legend = F) +
+    # facet_wrap(~as.factor(class_info), ncol = 2, scales = "free") +
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_text(angle = 20, vjust = 0.5))
+  features_plot
+  
+  ## Frequency breakdown
+  table(metadata_df[pid_idx, "subtype"], metadata_df[pid_idx, "class_info"],
+        metadata_df[pid_idx, "batch_info"])
+  
+  # pheatmap(data_yeoh[row_idx, col_idx], col = brewer.pal(9, "Blues"),
+  #          legend = T, border_color = NA, scale = "none",
+  #          cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+  #          show_colnames = F, show_rownames = F,
+  #          annotation_col = metadata_df)
+  
+  ## Plot dropout curve
+  log_yeoh <- log2_transform(subset_yeoh)
+  
+  list_batch <- split.default(data_yeoh, batch)
+  list_batch1 <- split.default(log_yeoh, batch)
+  
+  #' Converts gene expression df to contingency df with features:
+  #' mean_positive, n_positive, n_zero
+  tierExpression <- function(X) {
+    tierFeature <- function(x) {
+      x_positive <- x[x > 0]
+      mean_positive <- mean(x_positive) # TODO: Median?
+      n_positive <- length(x_positive)
+      # ASSUMPTION: No negative values
+      c(mean_positive, n_positive, length(x)-n_positive)
+    }
+    features <- data.frame(t(apply(X, 1, tierFeature)))
+    colnames(features) <- c("mean_positive", "n_positive", "n_zero")
+    return(features)
+  }
+  
+  list_tier <- lapply(list_batch, tierExpression)
+  i <- 3
+  n <- list_tier[[i]][1, 2] + list_tier[[i]][1,3]
+  dropout_rate <- list_tier[[i]]$n_zero/n
+  plot(dropout_rate, list_tier[[i]]$mean_positive, ylim = c(0,15))
+  
+  list_tier1 <- lapply(list_batch1, tierExpression)
+  i <- 8
+  n <- list_tier1[[i]][1, 2] + list_tier1[[i]][1,3]
+  dropout_rate <- list_tier1[[i]]$n_zero/n
+  plot(dropout_rate, list_tier1[[i]]$mean_positive, ylim = c(0,15))
+}
