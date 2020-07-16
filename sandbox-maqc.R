@@ -72,9 +72,8 @@ rownames(metadata_df) <- colnames(raw_maqc)
 # SCALE->REMOVE->FILTER->LOG
 scaled_maqc <- removeProbesets(normaliseMeanScaling(raw_maqc))
 # scaled_maqc <- normaliseMeanScaling(raw_maqc)
-filtered_maqc <- filterProbesets(scaled_maqc, 0.7, metadata_df1)
+filtered_maqc <- filterProbesets(scaled_maqc, 0.7, metadata_df)
 log_maqc <- log2_transform(filtered_maqc)
-subset_maqc <- log_maqc[,1:20]
 
 # Investigate additive batch effects --------------------------------------
 par(mfrow=c(1,2))
@@ -954,7 +953,6 @@ dev.off()
 plot(rowMeans(x[,1:5]), rowMeans(x[,11:15]),
      main = "log2(raw_maqc) (B1-MeanA vs B2-MeanA)")
 
-
 plot_arr <- rowMeans(x[,1:5])
 ggplot(data.frame(plot_arr)) +
   geom_jitter(aes(x = plot_arr, y = 0))
@@ -1108,3 +1106,32 @@ save_fig(pairwise_plot, "dump/pairwise_pca.pdf",
 
 subset_maqc <- log_maqc[,c(1:8,14:20)]
 plotPCA2D(subset_maqc, metadata_df)
+
+# BCM: Multilevel ---------------------------------------------------------
+# Plot: Normalised data
+plotPCA2D(log_maqc, metadata_df)
+plotPCA3DBatchEffects(log_maqc, metadata_df)
+
+# Batch correction
+batch <- metadata_df[colnames(log_maqc), "batch_info"]
+maqc_metadata <- metadata_df[,2, drop = F]
+bcm_maqc <- correctMultiBCM(log_maqc, batch, maqc_metadata, 1)
+plotPCA2D(bcm_maqc, metadata_df)
+plotPCA3DBatchEffects(bcm_maqc, metadata_df)
+
+# Investigate correction vectors
+CORRECTION_RPATH <- "temp/correction_maqc-6.rds"
+correction <- readRDS(CORRECTION_RPATH)
+str(correction[1,])
+str(correction[2,])
+big_correction <- as.data.frame(correction[1,])
+n_big <- sum(apply(big_correction != 0, 1, any))
+
+# Investigate individual genes
+pca_obj <- prcomp(t(bcm_maqc))
+loadings <- pca_obj$rotation
+probesets <- names(head(sort(abs(loadings[,2]), decreasing = T)))
+i <- 6
+colnames(bcm_maqc)
+plot(1:ncol(bcm_maqc), bcm_maqc[probesets[i],],
+     col = rep(1:6, each=10), pch = rep(rep(15:16, each=5), 6), cex = 1.5)

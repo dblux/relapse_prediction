@@ -625,8 +625,8 @@ correctMultiBCM <- function(X, batch, metadata, ref_batch, size = 3,
                              sublist_combi_tiered,
                              sublist_ref_tiered)
         
-        # CORRECTION_WPATH <- sprintf("temp/correction-%s.rds", batch_name)
-        # saveRDS(correction, CORRECTION_WPATH)
+        CORRECTION_WPATH <- sprintf("temp/correction_maqc-%s.rds", batch_name)
+        saveRDS(correction, CORRECTION_WPATH)
         
         # Single correction value is sufficient to trigger correction
         big_df <- data.frame(correction[1,])
