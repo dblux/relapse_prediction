@@ -981,7 +981,7 @@ for (subtype in subtypes) {
   ## print(c("Variance:", var_pc))
   cum_var <- cumsum(var_pc)
   # pc_ind <- which.max(cum_var > 0.70) # Identify PC theshold with >70% var
-  
+
   pca_coord <- pca_obj$x[,1:3]
   
   # Response df and normal df
@@ -1215,13 +1215,14 @@ pid_remission <- rownames(metadata_df)[metadata_df$label == 0]
 
 # list_drug_genes <- list()
 for (subtype in subtypes) {
-  print(c("Subtype:", subtype))
+  # print(c("Subtype:", subtype))
   
   # Select genes
   # X_subtype <- X_subtypes[[subtype]]
   #-- OPTION: Hyperdiploid
-  X_subtype <- X[, not_pid_top3_median_1]
-  pid <- c(not_pid_top3_median_1, normal_pid)
+  col_pid <- pid_any_grp4[[1]]
+  X_subtype <- X[, col_pid]
+  pid <- c(col_pid, normal_pid)
   print(colnames(X_subtype))
   #--
   class_genes <- getLocalGenes(X_subtype, pid_remission)
@@ -1286,7 +1287,7 @@ for (subtype in subtypes) {
   
   # OPTION: Automatic filename
   # PREDICTION_WPATH <- sprintf("~/Dropbox/temp/prediction_top-%s.pdf", subtype)
-  PREDICTION_WPATH <- "~/Dropbox/temp/prediction_not_top3_median-Hyperdiploid.pdf"
+  PREDICTION_WPATH <- "~/Dropbox/temp/prediction_grp4_LR.pdf"
   ggsave(PREDICTION_WPATH, prediction_parallel, width = 14, height = 7)
 }
 
@@ -1679,7 +1680,7 @@ getLocalGenes <- function(X_subtype, pid_remission,
   # print(colnames(X_subtype_remission)[-(1:n_pairs)])
   
   # P-value
-  pvalue <- calc_ttest(X_subtype_remission, n_pairs, is_paired = T) # nan values!
+ pvalue <- calc_ttest(X_subtype_remission, n_pairs, is_paired = T) # nan values!
   
   # # Plot
   # hist(pvalue, breaks = 20, main = subtype)
@@ -2040,12 +2041,12 @@ save_fig(upset_plot, "dump/upset-selected_genes.pdf",
 subset_selected <- list_selected[-c(1,4)]
 intersect_genes <- Reduce(intersect, subset_selected)
 
-# Hyperdiploid classification ---------------------------------------------
-## Plot: Sum of expression
+# Hyperdiploid preprocessing ---------------------------------------------
 # Normalised: D0 data
 idx_d0 <- metadata_df[colnames(data_yeoh), "class_info"] == "D0"
 sum_d0 <- colSums(data_yeoh)[idx_d0]
 
+## Plot: Sum of expression
 # D <- data.frame(subtype = metadata_df[names(sum_d0), "subtype"],
 #                 value = sum_d0)
 # features_plot <- ggplot(D, aes(as.factor(subtype), value, colour = subtype)) +
@@ -2146,7 +2147,6 @@ ratio_jitter2 <- ggplot(long_median_ratio[(20*22+1):902,], aes(chr, value)) +
 ggsave("~/Dropbox/temp/median_jitter-ratio2.pdf", ratio_jitter2,
        width = 16, height = 10)
 
-
 # Plot all medians
 i <- 10
 plot(rep(0, 22), hypdip_median_no_chrY[,i],
@@ -2156,28 +2156,72 @@ text(rep(0, 22) + .5, hypdip_median_no_chrY[,i],
      cex = .8)
 
 # Remove zero values from indv patients before median
-hypdip_chr_median1 <- t(sapply(list_chr_hypdip, apply, 2,
-                               function(vec) median(vec[vec != 0])))
-hypdip_median1_no_chrY <- hypdip_chr_median1[1:22,]
-hypdip_median1_no_chrY
-ranked_chr_median1 <- apply(-hypdip_median1_no_chrY, 2,
-                            function(x) names(sort(x)))
+list_chr_hypdip <- split.data.frame(hyperdiploid, ps_chr)
+nozero_median <- t(sapply(list_chr_hypdip, apply, 2,
+                            function(vec) median(vec[vec != 0])))
+fltr_nozero_median <- nozero_median[1:22,]
+ranked_nozero_median <- apply(-fltr_nozero_median, 2,
+                              function(x) names(sort(x)))
+
+## Determine mean and sd of chr medians of normal
+dim(fltr_nozero_median)
+ref_normal <- fltr_nozero_median[,"N01"]
+ref_mean <- mean(ref_normal)
+ref_sd <- sd(ref_normal)
+standardised_chr <- (fltr_nozero_median-ref_mean)/ref_sd
+
+long_standardised_chr <- melt(standardised_chr, varnames = c("chr", "pid"))
+long_standardised_chr$chr <- factor(long_standardised_chr$chr,
+                                    levels = levels(long_standardised_chr$chr)[
+                                      c(1,12,16:22,2:11,13:15,23)])
+# Create color map for chr
+col_chr <- setdiff(lit_chr, "chrX")
+all_chr <- paste0("chr", 1:22)
+nocol_chr <- setdiff(all_chr, col_chr)
+nocol_chr <- setdiff(all_chr, c(col_chr, bad_chr))
+col_map <- c(rep("darkolivegreen3", length(col_chr)),
+             rep("tomato3", length(bad_chr)),
+             rep("black", 22-length(col_chr)-length(bad_chr)))
+names(col_map) <- c(col_chr, bad_chr, nocol_chr)
+
+std_jitter1 <- ggplot(long_standardised_chr[1:(20*22),],
+                      aes(chr, value, color = chr)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 5,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5)) +
+  scale_color_manual(values = col_map)
+  ylim(-3.1, 8)
+
+std_jitter2 <- ggplot(long_standardised_chr[(20*22+1):902,],
+                      aes(chr, value, color = chr)) +
+  geom_point(position = position_jitter(width=.1, height=0),
+             cex = 2, show.legend = F) +
+  facet_wrap(~pid, nrow = 4, ncol = 6,  scales = "free_x") +
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x=element_text(angle = 90, vjust = 0.5)) +
+  scale_color_manual(values = col_map) +
+  ylim(-3.1, 8)
+std_jitter1
+
+ggsave("~/Dropbox/temp/std_jitter-nozero_median1.pdf", std_jitter1,
+       width = 16, height = 10)
 
 ## Hyperdiploid D0: Split into chr
 list_chr_hypdip <- split.data.frame(hyperdiploid, ps_chr)
-hypdip_chr_mean <- t(sapply(list_chr_hypdip, colMeans))
-hypdip_no_chrY <- hypdip_chr_mean[1:23,]
+chr_mean <- t(sapply(list_chr_hypdip, colMeans))
+fltr_mean <- chr_mean[1:22,]
+ranked_mean <- apply(-fltr_mean, 2,
+                     function(x) names(sort(x)))
 
 # ## Ranks
 # hypdip_rank <- apply(hyperdiploid, 2, rank, ties.method = "min")
 # list_chr_rank <- split.data.frame(hypdip_rank, ps_chr)
 # hypdip_chr_rank <- t(sapply(list_chr_rank, colMeans))
 # hypdip_rank_no_chrY <- hypdip_chr_rank[1:23,]
-
-# # Entire dataset
-# list_chr <- split.data.frame(data_yeoh, ps_chr)
-# chr_mean <- t(sapply(list_chr, colMeans))
-# chr_mean
 
 # Plot
 pheatmap(hypdip_no_chrY, col = brewer.pal(9, "Blues"),
@@ -2256,8 +2300,6 @@ jitter_batch1 <- ggplot(long_batch1, aes(pid, value, colour=pid)) +
 ggsave("~/Dropbox/temp/jitter_batch-raw.pdf", jitter_batch1,
        width = 16, height = 10)
 
-## TODO: Other methods of consolidating chr info aside from colMean?
-
 ## Rank within patient
 rank_chr_mean <- apply(-hypdip_no_chrY, 2, rank)
 print(rank_chr_mean)
@@ -2302,16 +2344,29 @@ ggsave("~/Dropbox/temp/jitter-ratio1.pdf", ratio_jitter1,
        width = 16, height = 10)
 ratio_jitter1
 
-# Manual identification
+# Hyperdiploid - Risk classification --------------------------------------
+normal_pid <- paste0("N0", c(1,2,4))
+getPID <- function(pid_d0) {
+  if (length(pid_d0) == 0) stop("Empty list...")
+  
+  pid_d8 <- paste0(substring(pid_d0, 1, 6), "8")
+  pid_all <- c(pid_d0, pid_d8)
+  
+  pid_d0_not <- setdiff(colnames(hyperdiploid),
+                        c(pid_d0, normal_pid))
+  pid_d8_not <- paste0(substring(pid_d0_not, 1, 6), "8")
+  pid_all_not <- c(pid_d0_not, pid_d8_not)
+  return(list(pid_all, pid_all_not))
+}
+
 # Rank without chrX
 ranked_chr <- apply(-ratio_within[1:22,], 2, function(x) names(sort(x)))
 top_5 <- ranked_chr[1:5,]
-top_5
 # Subset patients
 idx <- colSums(ratio_within > 1.1) >= 5 # pid
 list_top5 <- as.list(data.frame(top_5[,idx]))
 lit_chr <- c("chr4", "chr6", "chr10", "chr14", "chr17",
-             "chr18", "chr20", "chr21", "chrX")
+             "chr18", "chr21", "chrX")
 idx1 <- sapply(list_top5, function(x) all(x %in% lit_chr))
 selected_list_top5 <- list_top5[idx1]
 sort_top5 <- lapply(selected_list_top5, sort)
@@ -2331,62 +2386,105 @@ intersect(pid_top5, not_pid_top5)
 top_3 <- ranked_chr[1:3,]
 list_top3 <- as.list(data.frame(top_3))
 lit_chr <- c("chr4", "chr6", "chr10", "chr14", "chr17",
-             "chr18", "chr20", "chr21", "chrX")
+             "chr18", "chr21", "chrX")
 fav_chr <- c("chr4", "chr6", "chr10", "chr14", "chr17", "chr18")
-# OPTION
-# idx_lit3 <- sapply(list_top3, function(x) all(x %in% fav_chr))
+# All top 3 chr have to be in literature
 idx_lit3 <- sapply(list_top3, function(x) all(x %in% lit_chr))
 selected_top3 <- list_top3[idx_lit3]
 sort_top3 <- lapply(selected_top3, sort)
 paste_chr3 <- sapply(sort_top3, function(vec) do.call(paste0, as.list(vec)))
 table(paste_chr3)
-
-# All top 3 chr have to be in literature
-d0_top3_1 <- names(selected_top3)
-d8_top3_1 <- paste0(substring(d0_top3_1, 1, 6), "8")
-pid_top3_1 <- c(d0_top3_1, d8_top3_1)
-not_d0_top3_1 <- setdiff(colnames(hyperdiploid),
-                         c(d0_top3_1, normal_pid))
-not_d8_top3_1 <- paste0(substring(not_d0_top3_1, 1, 6), "8")
-not_pid_top3_1 <- c(not_d0_top3_1, not_d8_top3_1)
-pid_top3_1
+pid_mean_top3 <- getPID(names(selected_top3))
 
 # All top 4 have to be in literature
 top_4 <- ranked_chr[1:4,]
 list_top4 <- as.list(data.frame(top_4))
 lit_chr <- c("chr4", "chr6", "chr10", "chr14", "chr17",
-             "chr18", "chr20", "chr21", "chrX")
+             "chr18", "chr21", "chrX")
+# All top 4 chr have to be in literature
 idx_lit4 <- sapply(list_top4, function(x) all(x %in% lit_chr))
 selected_top4 <- list_top4[idx_lit4]
 sort_top4 <- lapply(selected_top4, sort)
 paste_chr4 <- sapply(sort_top4, function(vec) do.call(paste0, as.list(vec)))
 table(paste_chr4)
+pid_mean_top4 <- getPID(names(selected_top4))
 
-# All top 4 chr have to be in literature
-d0_top4_1 <- names(selected_top4)
-d8_top4_1 <- paste0(substring(d0_top4_1, 1, 6), "8")
-pid_top4_1 <- c(d0_top4_1, d8_top4_1)
-not_d0_top4_1 <- setdiff(colnames(hyperdiploid),
-                         c(d0_top4_1, normal_pid))
-not_d8_top4_1 <- paste0(substring(not_d0_top4_1, 1, 6), "8")
-not_pid_top4_1 <- c(not_d0_top4_1, not_d8_top4_1)
-
-## Rank by median (Top 3)
-top_3_median <- ranked_chr_median[1:3,]
-list_median_top3 <- as.list(data.frame(top_3_median))
+### MEDIAN - NO ZERO
+## Top 4 in L
+top_4_median <- ranked_nozero_median[1:4,]
+list_median_top4 <- as.list(data.frame(top_4_median))
 lit_chr <- c("chr4", "chr6", "chr10", "chr14", "chr17",
-             "chr18", "chr20", "chr21", "chrX")
-idx_median_top3 <- sapply(list_median_top3, function(x) all(x %in% lit_chr))
-selected_median_top3 <- list_median_top3[idx_median_top3]
-d0_top3_median_1 <- names(selected_median_top3)
-d8_top3_median_1 <- paste0(substring(d0_top3_median_1, 1, 6), "8")
-pid_top3_median_1 <- c(d0_top3_median_1, d8_top3_median_1)
+             "chr18", "chr21", "chrX")
+idx_median_top4 <- sapply(list_median_top4, function(x) all(x %in% lit_chr))
+selected_median_top4 <- list_median_top4[idx_median_top4]
+pid_median_top4 <- getPID(names(selected_median_top4))
+str(pid_median_top4)
 
-not_d0_top3_median_1 <- setdiff(colnames(hyperdiploid),
-                                c(d0_top3_median_1, normal_pid))
-not_d8_top3_median_1 <- paste0(substring(not_d0_top3_median_1, 1, 6), "8")
-not_pid_top3_median_1 <- c(not_d0_top3_median_1, not_d8_top3_median_1)
-pid_top3_median_1
+## Top 4 in B
+bad_chr <- c("chr1", "chr13", "chr15", "chr19", "chr20")
+top_4_median <- ranked_nozero_median[1:4,]
+list_median_top4 <- as.list(data.frame(top_4_median))
+idx_median_top4_1 <- sapply(list_median_top4, function(x) any(x %in% bad_chr))
+selected_median_top4_1 <- list_median_top4[idx_median_top4_1]
+pid_median_top4_1 <- getPID(names(selected_median_top4_1))
+
+# Contingency table frequency
+relapse_pid <- c("P038_D0", "P115_D0", "P129_D0", "P164_D0", "P189_D0")
+sum(pid_median_top4_1[[1]] %in% relapse_pid)
+length(pid_median_top4_1[[1]])/2 - 4
+sum(pid_median_top4_1[[2]] %in% relapse_pid)
+length(pid_median_top4_1[[2]])/2 - 1
+
+## Top 4 in B OR Chr 13 +/- threshold s.d.
+threshold <- -2
+# standardised_chr is s.d. away from mean
+d0_chr13_1 <- colnames(standardised_chr)[standardised_chr[5,] < threshold]
+d0_median_top4_1 <- names(selected_median_top4_1)
+d0_top4_chr13 <- union(d0_median_top4_1, d0_chr13_1)
+pid_top4_chr13 <- getPID(d0_top4_chr13)
+# Contingency table frequency
+relapse_pid <- c("P038_D0", "P115_D0", "P129_D0", "P164_D0", "P189_D0")
+sum(pid_top4_chr13[[1]] %in% relapse_pid)
+length(pid_top4_chr13[[1]])/2 - 4
+sum(pid_top4_chr13[[2]] %in% relapse_pid)
+length(pid_top4_chr13[[2]])/2 - 1
+
+## Any of set MN_68-79 chr +/- 2
+grp4_chr <- c("chr1", "chr7", "chr13", "chr15", "chr19", "chr20")
+threshold <- 2
+subset_std_chr <- standardised_chr[rownames(standardised_chr) %in% grp4_chr,]
+fltr_logi <- abs(subset_std_chr) > threshold
+any_chr_logi <- apply(fltr_logi, 2, any)
+d0_any_grp4 <- names(any_chr_logi)[any_chr_logi]
+pid_any_grp4 <- getPID(d0_any_grp4)
+pid_any_grp4[[2]]
+# Contingency table frequency
+createTable <- function(list_pid) {
+  relapse_pid <- c("P038_D0", "P115_D0", "P129_D0", "P164_D0", "P189_D0")
+  n_relapse <- sum(list_pid[[1]] %in% relapse_pid)
+  length(list_pid[[1]])/2 - 4
+  sum(list_pid[[2]] %in% relapse_pid)
+  length(list_pid[[2]])/2 - 1
+  
+  table_dimnames <- list(c("HR", "LR"),
+                         c("Relapse", "Remission"))
+  matrix(c(5, 0, 12, 21), nrow = 2, dimnames = table_dimnames)
+}
+
+relapse_pid <- c("P038_D0", "P115_D0", "P129_D0", "P164_D0", "P189_D0")
+sum(pid_any_grp4[[1]] %in% relapse_pid)
+length(pid_any_grp4[[1]])/2 - 4
+sum(pid_any_grp4[[2]] %in% relapse_pid)
+length(pid_any_grp4[[2]])/2 - 1
+
+## Chr 13 +/- threshold s.d.
+threshold <- 2.4
+d0_1 <- colnames(standardised_chr)[abs(standardised_chr[5,]) > threshold]
+d8_1 <- paste0(substring(d0_1, 1, 6), "8")
+pid_1 <- c(d0_1, d8_1)
+not_d0_1 <- setdiff(colnames(standardised_chr), c(d0_1, normal_pid))
+not_d8_1 <- paste0(substring(not_d0_1, 1, 6), "8")
+not_pid_1 <- c(not_d0_1, not_d8_1)
 
 # Investigate top ratios: No pattern
 sorted_ratio <- apply(ratio_within, 2, sort, decreasing=TRUE)
@@ -2419,9 +2517,11 @@ xtable(t(top5_relapse))
 # write.table(hyp_annot, HYP_WPATH, quote = F, sep = "\t", row.names = F)
 
 CNV_RPATH <- "data/GSE67684/processed/metadata/hyperdiploid-cnv.txt"
-cnv <- read.table(CNV_RPATH, header = T, sep = "\t", row.names = 1)
-cnv[cnv == "UPD"] <- 0 # Uniparental disomy
-
+raw_cnv <- read.table(CNV_RPATH, header = T, sep = "\t", row.names = 1,
+                  strip.white = T)
+raw_cnv[raw_cnv == "UPD"] <- 0 # Uniparental disomy
+cnv <- trimws(as.matrix(raw_cnv))
+class(cnv) <- "numeric"
 colnames(cnv) <- substring(colnames(cnv), 4)
 
 listCNV <- function(row) {
@@ -2433,19 +2533,25 @@ listCNV <- function(row) {
 }
 
 list_cnv <- apply(cnv, 1, listCNV)
-list_concat <- lapply(
-  list_cnv, function(list) lapply(list,
-                                  function(vec) do.call(paste, c(as.list(vec), sep = ", "))))
+paste_chr <- function(list) {
+  lapply(list, function(vec) do.call(paste,
+                                     c(as.list(vec), sep = ", ")))
+}
+list_concat <- lapply(list_cnv, paste_chr)
 cnv_summary <- data.frame(sapply(list_concat, as.character))
 pid_cnv <- paste(colnames(cnv_summary), "D0", sep = "_")
-# Mean
-subset_top_10 <- substring(ranked_chr[1:10, pid_cnv], 4) # remove char "chr"
-colnames(subset_top_10) <- substring(colnames(subset_top_10), 1, 4)
-cnv_top <- rbind(cnv_summary, subset_top_10)
-cnv_top10 <- t(cnv_top[c(1:2, 5:14), colnames(cnv_top) != "P154"])
-colnames(cnv_top10) <- c("Extra 2", "Extra 1", "1st", "2nd", "3rd",
-                         paste0(4:10, "th"))
-# Median (no filtering)
+
+## Mean
+mean_top10 <- substring(ranked_mean[1:10, pid_cnv], 4) # remove char "chr"
+colnames(mean_top10) <- substring(colnames(mean_top10), 1, 4)
+cnv_mean_top10 <- rbind(cnv_summary, mean_top10)
+cnv_mean_top10 <- t(cnv_mean_top10[
+  c(1:2, 5:14), colnames(cnv_mean_top10) != "P154"])
+colnames(cnv_mean_top10) <- c("Extra 2", "Extra 1", "1st", "2nd", "3rd",
+                              paste0(4:10, "th"))
+xtable(cnv_mean_top10)
+
+## Median (no filtering)
 subset_top_10_1 <- substring(ranked_chr_median[1:10, pid_cnv], 4) # remove char "chr"
 colnames(subset_top_10_1) <- substring(colnames(subset_top_10_1), 1, 4)
 cnv_top_1 <- rbind(cnv_summary, subset_top_10_1)
@@ -2454,44 +2560,50 @@ colnames(cnv_top10_1) <- c("Extra 2", "Extra 1", "1st", "2nd", "3rd",
                            paste0(4:10, "th"))
 xtable(cnv_top10_1)
 
-# Median (filtered zeros)
-# Median (no filtering)
-subset_top_10_2 <- substring(ranked_chr_median1[1:10, pid_cnv], 4) # remove char "chr"
-colnames(subset_top_10_2) <- substring(colnames(subset_top_10_2), 1, 4)
-cnv_top_2 <- rbind(cnv_summary, subset_top_10_2)
-cnv_top10_2 <- t(cnv_top_2[c(1:2, 5:14), colnames(cnv_top_2) != "P154"])
-colnames(cnv_top10_2) <- c("Extra 2", "Extra 1", "1st", "2nd", "3rd",
-                           paste0(4:10, "th"))
-xtable(cnv_top10_2)
+## Median (filtered zeros)
+ranked_nozero_median
+# Remove char "chr"
+nozero_median_top10 <- substring(ranked_nozero_median[1:10, pid_cnv], 4)
+colnames(nozero_median_top10) <- substring(colnames(nozero_median_top10), 1, 4)
+cnv_nozero_median <- rbind(cnv_summary, nozero_median_top10)
+cnv_nozero_median <- t(cnv_nozero_median[
+  c(1:2, 5:14), colnames(cnv_nozero_median) != "P154"])
+colnames(cnv_nozero_median) <- c("Extra 2", "Extra 1", "1st", "2nd", "3rd",
+                                 paste0(4:10, "th"))
+xtable(cnv_nozero_median)
 
-# CNV results not provided
-subset_top_10_1 <- substring(
-  ranked_chr[1:10, !colnames(ranked_chr) %in% pid_cnv], 4) # remove char "chr"
-subset_top_10_2 <- t(subset_top_10_1)
-colnames(subset_top_10_2) <- c("1st", "2nd", "3rd",
+### No CNV results!
+## Mean
+not_cnv_mean <- substring(
+  ranked_mean[1:10, !colnames(ranked_mean) %in% pid_cnv], 4) # remove char "chr"
+not_cnv_mean <- t(not_cnv_mean)
+colnames(not_cnv_mean) <- c("1st", "2nd", "3rd",
                                paste0(4:10, "th"))
-rownames(subset_top_10_2) <- substring(rownames(subset_top_10_2), 1, 4)
-xtable(subset_top_10_2)
-# Median
+rownames(not_cnv_mean) <- substring(rownames(not_cnv_mean), 1, 4)
+xtable(not_cnv_mean)
+
+## Median
 median_not_cnv <- t(substring(
-  ranked_chr_median[1:10, !colnames(ranked_chr_median) %in% pid_cnv],
+  ranked_nozero_median[1:10, !colnames(ranked_nozero_median) %in% pid_cnv],
   4)) # remove char "chr"
 colnames(median_not_cnv) <- c("1st", "2nd", "3rd",
                               paste0(4:10, "th"))
 rownames(median_not_cnv) <- substring(rownames(median_not_cnv), 1, 4)
 xtable(median_not_cnv)
 
+# Statistical test --------------------------------------------------------
 ## Fisher's exact test
 contingency_table <- matrix(c(4, 1, 13, 20), nrow = 2,
                             dimnames = list(c("HR", "LR"),
                                             c("Relapse", "Remission")))
 results <- fisher.test(contingency_table)
-contingency_table
-results
 
-hypgeom_pvalue <- function(a, b, c, d) {
-  choose(a+b, a)*choose(c+d, c)/choose(a+b+c+d, a+c)  
-}
+## Chi-square test (with Yate's correction)
+contingency_table1 <- matrix(c(5, 0, 12, 21), nrow = 2,
+                             dimnames = list(c("HR", "LR"),
+                                             c("Relapse", "Remission")))
+contingency_table1
+chisq_obj <- chisq.test(contingency_table1)
+print(chisq_obj)
 
-xtable(contingency_table)
-
+expected_tab <- matrix(c(5*17/38, 5*21/38, 33*17/38, 33*21/38), nrow = 2)
