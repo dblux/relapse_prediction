@@ -402,11 +402,19 @@ yeoh_label <- read.table(LABEL_RPATH, sep = "\t", header = T, row.names = 1)
 # SCALE->REMOVE->FILTER->LOG
 scaled_yeoh <- normaliseMeanScaling(raw_yeoh)
 selected_yeoh <- removeProbesets(scaled_yeoh)
-data_yeoh <- log2_transform(filterProbesets(selected_yeoh, 0.7, metadata_df))
+X <- log2_transform(filterProbesets(selected_yeoh, 0.7, metadata_df))
+Y <- metadata_df[colnames(X),]
 
 # # Filter out all rows with zero values
 # logi_idx <- rowSums(data_yeoh == 0) == 0
 # filtered_yeoh <- data_yeoh[logi_idx,]
+
+                                 
+### POPULAR GLOBALS ###
+all_subtypes <- levels(metadata_df$subtype)
+subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+Y_annot <- Y[,c("batch_info", "label")] # heatmap annot
+pid_remission <- rownames(Y)[Y$label == 0]
 
 # Prediction (Batch genes) -------------------------------------------------------
 ## Batch genes
@@ -1687,3 +1695,117 @@ mean(precision_cnv)
 
 ### INVESTIGATE BATCH EFFECTS
 table(metadata_df$subtype, metadata_df$batch_info)
+                         
+### RELAPSE GENES ######
+#' @param filename partial filename without file extension
+select_features <- function(X, Y, class,
+                            m = 50, alpha = .01, fc = 1, filename = NULL) {  
+  Y_ord <- Y[order(Y$label),] # t-test
+  Y_annot <- Y[,c("batch_info", "label")] # heatmap annot
+  
+  all_subtypes <- levels(metadata_df$subtype)
+  subtypes <- setdiff(all_subtypes, c("Hypodiploid", "Normal"))
+
+  list_ps <- list()
+  list_stats <- list()
+  for (subtype in subtypes) {
+    print(subtype)
+    pid <- rownames(Y_ord)[Y_ord$class_info == class & Y_ord$subtype == subtype]
+    n_remission <- sum(Y_ord[pid, "label"] == 0)
+    X_subtype <- X[,pid]
+
+    # T-test
+    ttest_arr <- calc_ttest(X_subtype, size_a = n_remission,
+                            flag = "both", is_paired = F)
+    pvalue <- ttest_arr["pvalue",]
+
+    top_pvalue <- head(sort(pvalue), m) # top M pvalue
+    top_ps_ttest <- names(top_pvalue)
+
+    fltr_ttest <- ttest_arr[, pvalue < alpha & !is.na(pvalue)] # threshold
+    ps_ttest <- colnames(fltr_ttest)
+
+    ## Log-fc
+    logfc <- calc_logfc(X_subtype[,1:n_remission],
+                        X_subtype[,(n_remission+1):ncol(X_subtype)])
+    fltr_logfc <- logfc[abs(logfc) > fc] # threshold
+    ps_logfc <- names(fltr_logfc)
+
+#     # Intersection
+#     ps_selected <- intersect(ps_logfc, ps_ttest)
+#     ps_final <- setdiff(ps_selected, batch_genes)
+
+#     # Limma
+#     design <- model.matrix(~label ,data = Y[colnames(X_subtype),])
+#     fit <- lmFit(X_subtype, design)
+#     fit <- eBayes(fit)
+#     limma_t <- fit$t[,2]
+#     limma_df <- fit$df.residual[1] + fit$df.prior
+#     limma_pvalue <- pt(abs(limma_t)*-1, limma_df)
+
+#     fltr_limma <- limma_pvalue[limma_pvalue < alpha & !is.na(limma_pvalue)]
+#     ps_limma <- names(fltr_limma)
+    
+    # Consolidate pvalue and logfc
+    statistics <- cbind(t(ttest_arr), logfc)
+    list_stats <- append(list_stats, list(statistics)) # save list
+    
+    # Save list
+    ps <- top_ps_ttest
+    list_ps <- append(list_ps, list(ps)) # save list
+    
+    print(length(ps))
+    
+    if (!is.null(filename)) {
+      # Plot
+      n <- length(pid)
+      m <- length(ps)
+      X_plot <- t(X[ps, pid])
+
+      wpath <- sprintf("%s-%s_%s.pdf", filename, subtype, class)
+      pheatmap(X_plot,
+               annotation_row = Y_annot,
+               col = brewer.pal(9, "Blues"),
+               display_numbers = F, fontsize = 5.5,
+               legend = T, border_color = "black", scale = "none",
+               cluster_method = "ward.D2", cluster_rows = T, cluster_cols = T,
+               show_colnames = T, show_rownames = T,
+               cellwidth = 400/m, cellheight = 240/n,
+               filename = wpath)  
+    }
+  }
+
+  names(list_ps) <- subtypes
+  names(list_stats) <- subtypes
+  
+  return(list(list_ps, list_stats))
+}
+
+top_ttest_d0 <- select_features(X, Y, class = "D0", m = 50)
+top_ttest_d0_ps <- top_ttest_d0[[1]]
+top_ttest_d0_stats <- top_ttest_d0[[2]]
+
+top_ttest_d8 <- select_features(X, Y, class = "D8", m = 50)
+top_ttest_d8_ps <- top_ttest_d8[[1]]
+top_ttest_d8_stats <- top_ttest_d8[[2]]
+
+plotPCA3DYeoh2 <- function(df1, metadata_df) {
+  # Shape of all timepoints
+  label <- as.factor(metadata_df[colnames(df1), "label"])
+  palette <- c("darkolivegreen3", "tomato3")
+  col <- palette[label]
+  print(colnames(df1))
+  print(col)
+  
+  plotPCA3D(df1, col, 21)
+}
+
+class <- "D8"
+
+subtype <- subtypes[[7]]
+pid <- rownames(Y)[Y$subtype == subtype & Y$class_info == class]
+X_plot <- X[top_ttest_d8_ps[[subtype]], pid]
+plotPCA3DYeoh2(X_plot, Y)
+
+wpath <- sprintf("~/Dropbox/temp/pca_3d-ttest_top50_%s_%s.pdf", subtype, class)
+rgl.postscript(wpath, "pdf")

@@ -97,3 +97,17 @@ plot_date <- ggplot(mile_metadata, aes(x = scan_date)) +
   # xlim(as.Date(c("2003-01-01", "2016-01-01"))) +
   # scale_x_date(date_breaks = "12 months", date_minor_breaks = "1 months") +
   theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+# Tidy subtype and sample type annot ---------------------------------------
+METADATA_RPATH <- "data/GSE13204/processed/metadata.tsv"
+metadata <- read.table(METADATA_RPATH, sep = "\t", header = T, row.names = 1)
+
+metadata$sample_type <- substring(metadata$sample_type, 14)
+metadata$subtype <- substring(metadata$subtype, 17)
+metadata$subtype_annot <- metadata$subtype
+metadata$subtype <- as.factor(metadata$subtype)
+levels(metadata$subtype) <- c("Hyperdiploid", "E2A-PBX1", "TEL-AML1",
+                              "BCR-ABL", "c-ALL/Pre-B-ALL without t(9;22)",
+                              "MYC-IGH", "Normal", "MLL", "T-ALL")
+METADATA_WPATH <- "data/GSE13204/processed/metadata1.tsv"
+write.table(metadata, METADATA_WPATH, quote = F, sep = "\t")
