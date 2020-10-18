@@ -17,6 +17,7 @@ library(xtable)
 source("../functions.R")
 source("bin/bcm.R")
 
+
 theme_set(theme_gray())
 
 # FUNCTIONS ---------------------------------------------------------------
