@@ -23,6 +23,10 @@ normaliseMeanScaling <- function(df, target_mean = 500, trim = 0.02) {
   return(scaled_df)
 }
 
+# TEST CASE
+# x <- data.frame(a = c(1:4, rep(0,6)),
+#                 b = c(1:5, rep(0,5)),
+#                 c = c(1:6, rep(0,4)))
 # Quantile normalisation: 0 values are assigned 0 automatically
 # Takes in df where columns are samples and rows are genes
 normaliseQuantile <- function(df) {
@@ -31,6 +35,7 @@ normaliseQuantile <- function(df) {
   # Creates reference distribution
   ref_distr <- apply(sort_arr, 1, mean)
   rank_arr <- apply(df, 2, rank, ties.method = "min")
+  # print(rank_arr)
   qnorm_arr <- apply(rank_arr, c(1,2), function(x) ref_distr[x])
   rownames(qnorm_arr) <- rownames(df)
   qnorm_df <- as.data.frame(qnorm_arr)
@@ -249,11 +254,24 @@ calc_ttest <- function(df, size_a, flag = "pvalue", is_paired = F) {
                   row_vec[-(1:size_a)],
                   paired = is_paired)$statistic)
   }
+    
+  row_both <- function(row_vec) {
+    ttest_obj <- t.test(row_vec[1:size_a],
+                        row_vec[-(1:size_a)],
+                        paired = is_paired)
+    return(c(pvalue = ttest_obj$p.value,
+             ttest_obj$statistic))
+  }
   
   if (flag == "pvalue") {
-    ttest_vec <- apply(df, 1, function(row) tryCatch(row_pvalue(row), error = function(e) NA))
+    ttest_vec <- apply(df, 1, function(row) tryCatch(row_pvalue(row),
+                                                     error = function(e) NA))
   } else if (flag == "tstat") {
-    ttest_vec <- apply(df, 1, function(row) tryCatch(row_tstat(row), error = function(e) NA))
+    ttest_vec <- apply(df, 1, function(row) tryCatch(row_tstat(row),
+                                                     error = function(e) NA))
+  } else if (flag == "both") {
+    ttest_vec <- apply(df, 1, function(row) tryCatch(row_both(row),
+                                                     error = function(e) NA))
   } else {
     stop("Flag not in options pvalue or tstat..")
   }
@@ -262,18 +280,24 @@ calc_ttest <- function(df, size_a, flag = "pvalue", is_paired = F) {
 
 # Arguments: 2 dataframes that are not log-transformed
 # Log-fold change (class1/class2)
-calc_logfc <- function(df1, df2, func = mean) {
-  # Minimum value of both df besides 0 chosen as prior value
-  prior_value <- min(c(df1[df1 != 0], df2[df2 != 0]))
-  print(paste("Prior value:", prior_value))
-  vec1 <- apply(df1, 1, func)
-  vec2 <- apply(df2, 1, func)
-  # log2(0) = -Inf; log2(Inf) = -Inf; log2(0/0) = NaN
-  # Reassigns 0s with prior_expr
-  vec1[vec1 == 0] <- prior_value
-  vec2[vec2 == 0] <- prior_value
-  fc <- vec1/vec2
-  return(log2(fc))
+calc_logfc <- function(df1, df2, func = mean, logged = T) {
+  if (logged) {
+    ## Mean of logged values: Geometric mean
+    return(apply(df1, 1, func) - apply(df2, 1, func))
+  } else {
+    # Minimum value of both df besides 0 chosen as prior value
+    prior_value <- min(c(df1[df1 != 0], df2[df2 != 0]))
+    print(paste("Prior value:", prior_value))
+    vec1 <- apply(df1, 1, func)
+    vec2 <- apply(df2, 1, func)
+    # log2(0) = -Inf; log2(Inf) = -Inf; log2(0/0) = NaN
+    # Reassigns 0s with prior_expr
+    ## Replace means that are zero with prior value
+    vec1[vec1 == 0] <- prior_value
+    vec2[vec2 == 0] <- prior_value
+    fc <- vec1/vec2
+    return(log2(fc))
+  }
 }
 
 #' Calculates QPSP profiles of samples
@@ -340,10 +364,20 @@ affy2id <- function(df, annot_fpath) {
   # Returns entrez ID for all probe sets
   id <- unname(sapply(rownames(df), function(x) probeset_annot[x,]))
   
-  # Indices of ambiguous probe sets and probe sets with no corresponding entrez ID to be deleted
-  list_del <- which(grepl("///", id) | id == "")
-  print(paste0("No. of probesets mapping to multiple IDs removed: ", sum(grepl("///", id))))
-  print(paste0("No. of probesets with no ID removed: ", sum(id == "")))
+  msg_multiple <- sprintf(
+    "No. of probesets mapping to multiple IDs removed: %d\n",
+    sum(grepl("///", id))
+  )
+  msg_no_id <- sprintf(
+    "No. of probesets with no ID removed: %d\n", sum(id == "")
+  )
+  cat(msg_multiple)
+  cat(msg_no_id)
+  
+  # Indices of ambiguous probe sets and probe sets with
+  # no corresponding ID to be deleted
+  list_del <- which(grepl("///", id) | id == "")  
+  
   # Identifies genes that have multiple probesets mapping to it
   freq_gene <- table(id)
   dup_genes <- names(freq_gene[freq_gene > 1])
@@ -365,8 +399,13 @@ affy2id <- function(df, annot_fpath) {
   # # CONCEPT CHECK: Deleted rows
   # df_genes_del <- df[list_del,]
   # entrez_del <- entrez[list_del]
-  print(paste0("Total no. of probesets removed (incl. probesets mapping to same gene): ",
-               length(list_del)))
+  
+  msg_total <- sprintf(
+    "Total no. of probesets removed (incl. probesets mapping to same gene): %d\n",
+    length(list_del)
+  )
+  cat(msg_total)
+  
   return(df_genes)
 }
 
@@ -436,6 +475,96 @@ kegg_df <- function(kegg_fpath) {
   df_hsa$to <- substring(df_hsa$to, 5)
   write.table(df_hsa, wpath,
               quote = F, sep = "\t", row.names = F)
+}
+
+#' Plots ROC curve
+#' @import ggplot2
+#' @param y vector of labels
+#' @param list_x list of vectors containing prediction scores
+#' @param bigger.positive logical vector indicating if bigger
+#' values have positive labels (e.g. relapse)
+plot_roc <- function(y, list_x, x_names, bigger.positive,
+                     lwd = 1) {
+  n <- length(list_x)
+  directions <- ifelse(bigger.positive, "<", ">") # TRUE: controls "<" cases
+  
+  roc_obj <- pROC::roc(
+      y, list_x[[1]],
+      direction = directions[1],
+      ret = "coords"
+  )
+  roc_df <- data.frame(
+    FPR = 1 - roc_obj$specificities,
+    TPR = roc_obj$sensitivities
+  )
+  auc <- roc_obj$auc
+  n_row <- nrow(roc_df)
+  roc_ord <- roc_df[seq(n_row, 1), ] # reverse order of df
+  
+  gen_addon <- function(i) {
+    roc_obj <- pROC::roc(
+        y, list_x[[i]], 
+        direction = directions[i],
+        ret = "coords"
+    )
+    roc_df <- data.frame(
+      FPR = 1 - roc_obj$specificities,
+      TPR = roc_obj$sensitivities
+    )
+    
+    return(list(coordinates = roc_df[seq(nrow(roc_df), 1), ],
+                auc = roc_obj$auc))
+  }
+  
+  list_obj <- lapply(seq(2, n), gen_addon)
+  roc_ords <- lapply(list_obj, function(obj) obj$coordinates)
+  aucs <- sapply(list_obj, function(obj) obj$auc)
+  n_rows <- sapply(roc_ords, nrow)
+
+  ## Combine first plot with other plots
+  all_df <- rbind(roc_ord, do.call(rbind, roc_ords)) # Each row is (FPR, TPR)
+  aucs <- c(auc, aucs)
+  # No. of points in ROC plot differs due to tied values
+  n_rows <- c(n_row, n_rows)
+  lnames <- rep(x_names, n_rows)
+  plot_df <- cbind(lnames, all_df)
+  labels <- sprintf("%s (%.3f)", x_names, aucs)
+
+  ax_roc <- ggplot() +
+    geom_segment(aes(x = 0, y = 0, xend = 1, yend = 1),
+                 inherit.aes = FALSE,
+                 lty = "dashed", lwd = lwd,
+                 colour = "black", alpha = .4) +
+    geom_line(data = plot_df,
+              aes(x = FPR, y = TPR, col = lnames),
+              lwd = lwd) +
+    scale_color_discrete(name = element_blank(),
+                         labels = labels) +
+    theme_bw() +
+    theme(legend.position = c(.95, .05),
+          legend.justification = c("right", "bottom"),
+          legend.background = element_rect(fill = NA)) +
+    labs(x = "FPR", y = "TPR")
+
+  return(ax_roc)
+}
+
+# 3D PCA plot
+plot3DScatter <- function(df, colour = "blue", pch = 21, pc_labels = NULL,
+                          ratio_list = list(2,1,1)) {
+  # RGL plot parameters
+  rgl.open()
+  rgl.bg(color="white")
+  rgl.viewpoint(zoom = 0.8)
+  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
+  par3d(windowRect = c(50, 20, 500, 500))
+  pch3d(df[,1], df[,2], df[,3], bg = colour,
+        pch = pch, cex = 0.5, lwd = 1.5)
+  box3d(col = "black")
+  # title3d(xlab = pc_labels[1], ylab = pc_labels[2],
+  #         zlab = pc_labels[3], col = "black")
+  # Plot aspect ratios of axis according to variance
+  do.call(aspect3d, ratio_list)
 }
 
 # Assumes that dataframe has been log-transformed
@@ -511,12 +640,13 @@ plot_pca <- function(df, batch_info) {
   return(pc1_pc2)
 }
 
+# Plots batches in different colours and classes in different symbols
 plotPCA2D <- function(df1, metadata_df, pc_labels = NULL) {
   # Obtaining batch and class annotations
   batch_factor <- as.factor(metadata_df[colnames(df1),"batch_info"])
   class_factor <- metadata_df[colnames(df1),"class_info"]
-  print(batch_factor)
-  print(class_factor)
+  print(head(batch_factor))
+  print(head(class_factor))
   
   # PCA
   if (is.null(pc_labels)) {
@@ -532,12 +662,12 @@ plotPCA2D <- function(df1, metadata_df, pc_labels = NULL) {
   
   pc1_pc2 <- ggplot(pca_df, aes(x = PC1, y = PC2, col = batch_factor,
                                 pch = class_factor)) +
-    geom_point(size = 3, show.legend = F) +
+    geom_point(size = 3, show.legend = T) +
     labs(x = pc_labels[1], y = pc_labels[2]) +
     geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
     geom_hline(yintercept = 0, color = "black", alpha = 0.5)
   # theme(plot.title = element_text(hjust = 0.5))
-  
+
   #   pc1_pc3 <- ggplot(pca_df, aes(x = PC1, y = PC3, col = batch_factor,
   #                                 pch = class_factor)) +
   #     geom_point(size = 3, show.legend = F) +
@@ -595,6 +725,26 @@ plotPCA3DBatchEffects <- function(df1, metadata_df) {
   stopifnot(length(unique(class_factor)) <= 5)
   class_pch <- all_pch[class_factor]
   plotPCA3D(df1, batch_colour, class_pch)
+}
+
+plotHeatmapSubtype <- function(X, metadata_df) {
+  subtype_factor <- metadata_df[colnames(X), "subtype"]
+  set3_pal <- brewer.pal(9, "Set3")
+  subtype_col <- set3_pal[subtype_factor]
+  
+  par(mar = c(1,1,1,1))
+  heatmap(data.matrix(X),
+          col = brewer.pal(9, "Blues"),
+          ColSideColors = subtype_col,
+          scale = "none",
+          labRow = NA, labCol = NA)
+  
+  legend(x = -.04, y = 1350, legend = levels(subtype_factor),
+         col = set3_pal[factor(levels(subtype_factor))],
+         pch = 15, cex = .7)
+  heatmap_subtype <- recordPlot()
+  par(mar = c(5.1, 4.1, 4.1, 2.1)) # Reset to defaults
+  return(heatmap_subtype)
 }
 
 # Plots ROC and calculates AUC in a primitive fashion (i.e. ROC is step function)
@@ -748,23 +898,27 @@ calc_var_prop <- function(df, batch_info, class_info) {
 }
 
 #' Calculates l2-norm of vector
-calcL2Norm <- function(vec) sqrt(sum(vec^2))
+calcL2Norm <- function(x) sqrt(sum(x^2))
 
 #' Calculates cosine similarity between two vectors
 #' @return Scalar cos(theta)
-calcCosineSim <- function(vec1, vec2) {
-  stopifnot(length(vec1) == length(vec2))
-  return(sum(vec1*vec2)/(calcL2Norm(vec1)*calcL2Norm(vec2)))
+calcCosineSim <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  
+  if (all(x == 0) | all(y == 0))
+    stop("Unable to calculate cosine similarity on zero vector..")
+  
+  return(sum(x*y)/sqrt(sum(x^2)*sum(y^2)))
 }
 
 #' Converts radians to degrees
 rad2degree <- function(rad) rad/pi * 180
 
 #' Calculates angle between two vectors (in degrees)
-calcAngleVectors <- function(vec1, vec2) {
+calcAngleVectors <- function(x, y) {
   # Prevents error when number is incorrectly calculated..
   # to be slightly above 1
-  cosine_sim <- calcCosineSim(vec1, vec2)
+  cosine_sim <- calcCosineSim(x, y)
   if (cosine_sim > 1) {
     print(sprintf("Cosine similarity: %.20f -> Rounded off!", cosine_sim))
     cosine_sim <- 1
@@ -778,8 +932,16 @@ calcRotationMatrix <- function(rad) matrix(c(cos(rad), -sin(rad),
                                              sin(rad), cos(rad)),
                                            2, 2, byrow = T)
 
+calcTPM <- function(X, feature_length) {
+  stopifnot(nrow(X) == length(feature_length))
+  # Divide by feature length
+  X_length <- X/feature_length
+  tpm <- sweep(X_length, 2, colSums(X_length), "/") * 1e+6
+  return(tpm)
+}
+
 # Generate default ggplot colours
-generateGgplotColours <- function(n) {
+ggplot_palette <- function(n) {
   hues = seq(15, 375, length = n + 1)
   return(hcl(h = hues, c = 100, l = 65)[1:n])
 }
