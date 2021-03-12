@@ -479,76 +479,119 @@ kegg_df <- function(kegg_fpath) {
 
 #' Plots ROC curve
 #' @import ggplot2
-#' @param y vector of labels
-#' @param list_x list of vectors containing prediction scores
-#' @param bigger.positive logical vector indicating if bigger
-#' values have positive labels (e.g. relapse)
-plot_roc <- function(y, list_x, x_names, bigger.positive,
-                     lwd = 1) {
-  n <- length(list_x)
-  directions <- ifelse(bigger.positive, "<", ">") # TRUE: controls "<" cases
-  
-  roc_obj <- pROC::roc(
-      y, list_x[[1]],
-      direction = directions[1],
-      ret = "coords"
-  )
-  roc_df <- data.frame(
-    FPR = 1 - roc_obj$specificities,
-    TPR = roc_obj$sensitivities
-  )
-  auc <- roc_obj$auc
-  n_row <- nrow(roc_df)
-  roc_ord <- roc_df[seq(n_row, 1), ] # reverse order of df
-  
-  gen_addon <- function(i) {
-    roc_obj <- pROC::roc(
-        y, list_x[[i]], 
-        direction = directions[i],
-        ret = "coords"
-    )
-    roc_df <- data.frame(
-      FPR = 1 - roc_obj$specificities,
-      TPR = roc_obj$sensitivities
-    )
-    
-    return(list(coordinates = roc_df[seq(nrow(roc_df), 1), ],
-                auc = roc_obj$auc))
+#' @param X dataframe containing scores / predictions and labels
+#' @param response character containing name of column in X with labels
+#' @param predictor character containing name of column/s in X of predictors
+#' @param pauc.limits numeric vector of length 2 indicating limits
+plot_roc <- function(
+  X, response, predictor,
+  pauc.limits = FALSE,
+  pauc.axis = c("specificity", "sensitivity"),
+  pauc.correct = TRUE,
+  return.auc = FALSE,
+  lwd = 1
+) {
+  if (!is.logical(pauc.limits)) {
+    pauc.limits <- sort(pauc.limits, decreasing = TRUE)
   }
   
-  list_obj <- lapply(seq(2, n), gen_addon)
-  roc_ords <- lapply(list_obj, function(obj) obj$coordinates)
-  aucs <- sapply(list_obj, function(obj) obj$auc)
-  n_rows <- sapply(roc_ords, nrow)
+  if (length(predictor) == 1) {
+    str_formula <- paste(response, predictor, sep = " ~ ")
+  } else if (length(predictor) > 1) {
+    predictors <- do.call(paste, c(as.list(predictor), sep = " + "))
+    str_formula <- paste(response, predictors, sep = " ~ ")
+  } else {
+    stop("arg predictor is of non-positive length.")
+  }
+  
+  roc_objs <- roc(
+    as.formula(str_formula),
+    data = X,
+    partial.auc = pauc.limits,
+    partial.auc.focus = match.arg(pauc.axis),
+    partial.auc.correct = pauc.correct
+  )
 
-  ## Combine first plot with other plots
-  all_df <- rbind(roc_ord, do.call(rbind, roc_ords)) # Each row is (FPR, TPR)
-  aucs <- c(auc, aucs)
-  # No. of points in ROC plot differs due to tied values
-  n_rows <- c(n_row, n_rows)
-  lnames <- rep(x_names, n_rows)
-  plot_df <- cbind(lnames, all_df)
-  labels <- sprintf("%s (%.3f)", x_names, aucs)
-
+  if (is(roc_objs, "roc")) {
+    aucs <- roc_objs$auc
+    d <- data.frame(
+      FPR = 1 - roc_objs$specificities,
+      TPR = roc_objs$sensitivities
+    )
+    d <- d[nrow(d):1, ]
+    d <- cbind(names = predictor, d)
+  } else {
+    aucs <- sapply(roc_objs, function(obj) obj$auc)
+    list_d <- lapply(
+      roc_objs,
+      function(obj) data.frame(
+        FPR = 1 - obj$specificities,
+        TPR = obj$sensitivities
+      )
+    )
+    list_d <- lapply(list_d, function(d) d[nrow(d):1, ])
+    d <- do.call(rbind, list_d)
+    n_rows <- sapply(list_d, nrow)
+    predictors_col <- rep(predictor, n_rows)
+    d <- cbind(names = predictors_col, d)
+  }
+            
+  # label colors are assigned by alphabetical order
+  labels <- sort(sprintf("%s (%.3f)", predictor, aucs))
+                     
   ax_roc <- ggplot() +
     geom_segment(aes(x = 0, y = 0, xend = 1, yend = 1),
                  inherit.aes = FALSE,
                  lty = "dashed", lwd = lwd,
                  colour = "black", alpha = .4) +
-    geom_line(data = plot_df,
-              aes(x = FPR, y = TPR, col = lnames),
-              lwd = lwd) +
-    scale_color_discrete(name = element_blank(),
-                         labels = labels) +
+    geom_step(data = d,  # to avoid mutiple plotting of geom_segment
+              aes(x = FPR, y = TPR, col = names, lty = names),
+              direction = "hv", lwd = lwd) +
+    scale_color_discrete(name = element_blank(), label = labels) +
     theme_bw() +
-    theme(legend.position = c(.95, .05),
-          legend.justification = c("right", "bottom"),
-          legend.background = element_rect(fill = NA)) +
-    labs(x = "FPR", y = "TPR")
-
-  return(ax_roc)
+    labs(x = "FPR", y = "TPR") +
+    theme(
+      legend.position = c(.95, .05),
+      legend.justification = c("right", "bottom"),
+      legend.background = element_rect(fill = NA)
+    )
+  
+  if (is.logical(pauc.limits)) {
+    # if no pauc.limits is provided
+    ax_roc <- ax_roc +
+      coord_cartesian(xlim = c(0, 1)) +
+      coord_cartesian(ylim = c(0, 1))
+  } else if (pauc.axis == "specificity") {
+    fpr_limits <- 1 - pauc.limits
+    d_rect <- data.frame(
+      xmin = fpr_limits[1], xmax = fpr_limits[2],
+      ymin = 0, ymax = 1
+    )
+    ax_roc <- ax_roc +
+#       coord_cartesian(xlim = fpr_limits) +
+      geom_rect(
+        d_rect, mapping = aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+        fill = "blue", color = "black", alpha = 0.3
+      )
+  } else if (pauc.axis == "sensitivity") {
+    d_rect <- data.frame(
+      xmin = 0, xmax = 1,
+      ymin = pauc.limits[2], ymax = pauc.limits[1]
+    )
+    ax_roc <- ax_roc +
+#       coord_cartesian(ylim = pauc.limits) +
+      geom_rect(
+        d_rect, mapping = aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+        fill = "blue", color = "black", alpha = 0.3
+      )
+  }
+  
+  if (return.auc) {
+    return(list(plot = ax_roc, auc = aucs))
+  }
+  ax_roc
 }
-
+                         
 # 3D PCA plot
 plot3DScatter <- function(df, colour = "blue", pch = 21, pc_labels = NULL,
                           ratio_list = list(2,1,1)) {
