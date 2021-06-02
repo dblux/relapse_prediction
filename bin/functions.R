@@ -581,7 +581,8 @@ plot_roc <- function(
     ax_roc <- ax_roc +
 #       coord_cartesian(ylim = pauc.limits) +
       geom_rect(
-        d_rect, mapping = aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+        data = d_rect,
+        aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
         fill = "blue", color = "black", alpha = 0.3
       )
   }
