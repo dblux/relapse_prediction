@@ -1,6 +1,7 @@
 # Files and directories to ignore
 data/
-history/
+hist/
+dump/
 .ipynb_checkpoints/
 
 .Rhistory
