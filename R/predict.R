@@ -461,7 +461,7 @@ calc_p_remission_x <- function(X_train, Y,
   rownames(pct_remission) <- rownames(X1_predict)
   
   # Without MRD
-  pct_wo_mrd <- pct_remission[, colnames(pct_remission) != "mrd"]
+  pct_wo_mrd <- pct_remission[, colnames(pct_remission) != "log_mrd"]
   p_wo_mrd <- apply(pct_wo_mrd, 1, mean, na.rm = T)
   
   # Arithmetic average
@@ -523,12 +523,9 @@ predict_plot <- function(X_train, Y,
     label = proba$label
   )
   
-  X_y$mrd <- log10(X_y$mrd) # log-transform mrd
-  colnames(X_y)[colnames(X_y) == "mrd"] <- "log_mrd"
-
   list(
     p = p,
-    P = proba,
+    p_remission = proba,
     X_y = X_y
   )
 }
@@ -563,12 +560,12 @@ predict_pipeline <- function(X_subtype, X_normal,
   
   # Collate MRD results as well
   V <- compute_features(response, normal, colnames(X_subtype), sid_remission)
-  V$mrd <- metadata_mrd[rownames(V), "d33_mrd"]
+  V$log_mrd <- log10(metadata_mrd[rownames(V), "d33_mrd"])
   
   prediction_obj <- predict_plot(
     V, metadata,                             
     bigpos_names = "angle_d0d8_d0normal",
-    smallpos_names = c("erm1_ratio2", "l2norm_ratio2", "mrd")
+    smallpos_names = c("erm1_ratio2", "l2norm_ratio2", "log_mrd")
   )
   
   return(prediction_obj)
