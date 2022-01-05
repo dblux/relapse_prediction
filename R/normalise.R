@@ -62,7 +62,7 @@ normaliseGFS <- function(A, upper = 0.05, lower = 0.15, num_intervals = 0) {
   cat(sprintf("Genes below the top %.2f of expressed genes are assigned GFS scores of 0\n", lower))
   # Rank function ranks largest value as 1 [-A is used]
   # Handle NaN?
-  ranked_A <- apply(-A, 2, dense_rank)
+  ranked_A <- apply(-A, 2, dplyr::dense_rank)
   rownames(ranked_A) <- rownames(A)
   # Returns [1,] = upper, [2,] = lower
   qtile <- apply(ranked_A, 2, quantile, probs=c(upper, lower), names=F)

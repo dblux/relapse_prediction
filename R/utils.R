@@ -6,38 +6,35 @@
 #'
 #' Removes probesets with no matching ID. If multiple probesets
 #' map to a single ID, the probeset with the max sum is used.
-#' @param X data.frame with affy probesets as rownames
+#' @param X data.frame with affy probesets as rownames. Assumes that X
+#'   does not contain ambiguous and affymetrix probesets.
 #' @param file name of the annotation file
 #' @param ret.annot logical indicating whether to return vector of annotations
 affy2id <- function(X, file, ret.annot = F) { 
   # probesets are rownames of dataframe
   annot_table <- read.table(
     file, sep = "\t", header = T, row.names = 1,
-    stringsAsFactors = F, strip.white = T
+    stringsAsFactors = F, strip.white = T, na.strings = ""
   )
-#   # Filters out ambiguous and AFFY probesets from annot 
-#   fltr_annot <- annot_table[
-#     grepl("[0-9]_at", rownames(annot_table)) 
-#     & !startsWith(rownames(annot_table), "A"),
-#     , drop = F
-#   ]
   orig_rownames <- annot_table[rownames(X), ]
-                      
   msg_no_id <- sprintf( 
-    "No. of probesets with no ID removed: %d\n", sum(orig_rownames == "")
+    "No. of probesets with no ID removed = %d\n",
+    sum(is.na(orig_rownames))
   )
   cat(msg_no_id)
    
-  # Indices of probe sets with no corresponding ID to be deleted 
-  idx_del <- which(orig_rownames == "")
+  # Indices of probe sets with no corresponding ID to be deleted and probesets
+  # that are not present in annot_table
+  idx_del <- which(is.na(orig_rownames))
    
   # Identifies genes that have multiple probesets mapping to it 
-  freq_gene <- table(orig_rownames)
-  dup_genes <- names(freq_gene[freq_gene > 1])
-  dup_genes <- setdiff(dup_genes, "")
+  freq_gene <- table(orig_rownames[!is.na(orig_rownames)])
+  dup_genes <- rownames(freq_gene)[freq_gene > 1]
   for (gene in dup_genes) {
+    # False & NA = False
+    idx <- !is.na(orig_rownames) & orig_rownames == gene
     # subset rows of dataframe with the same id
-    same_rows <- X[orig_rownames == gene, , drop = F] 
+    same_rows <- X[idx, , drop = F] 
     # assign numeric indices as rownames 
     rownames(same_rows) <- which(orig_rownames == gene)
     # rows that do not have the maximum sum are deleted 
@@ -47,7 +44,7 @@ affy2id <- function(X, file, ret.annot = F) {
     # concat with existing list of indices to be deleted 
     idx_del <- c(idx_del, row_del)
   }
-  
+  idx_del <- unique(idx_del) 
   msg_total <- sprintf(
     "Total no. of probesets removed (incl. probesets mapping to same gene): %d\n", 
     length(idx_del)

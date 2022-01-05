@@ -283,11 +283,11 @@ plot_vectors <- function(
 plot_boxplots <- function(X_y) {
   FEAT_ORDER <- c(
     "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
-    "log_mrd", "p_rem"
+    "log_mrd", "p"
   )
   FEAT_LABS <- c(
-    ""ERM Ratio"", ""ARM Ratio"", "theta",
-    "log[10](MRD)", "paste("P(Remission|", bold(x), ", s)")"
+    "'ERM Ratio'", "'ARM Ratio'", "theta",
+    "log[10](MRD)", "paste('P(Remission|', bold(x), ', s)')"
   )
   
   long_X_y <- melt(X_y, id = "label", variable.name = "feature")
@@ -365,7 +365,6 @@ plot_boxplots <- function(X_y) {
       lab = p_labs
     )
     ann_text <- na.omit(ann_text)
-    print(ann_text$feature)
 
     ax_jitter <- ax_jitter +
       geom_text(
@@ -636,8 +635,94 @@ jacc_coeff <- function(vec1, vec2) {
 }
 
 
+#' Get column names in same order as pheatmap plot
+#' @param obj pheatmap object
+get_colnames <- function(obj) {
+  obj$tree_col$labels[obj$tree_col$order]
+}
+
+
+#' Get row names in same order as pheatmap plot
+#' @param obj pheatmap object
+get_rownames <- function(obj) {
+  obj$tree_row$labels[obj$tree_row$order]
+}
+
+
 #' Generate default ggplot colours
 ggplot_palette <- function(n) {
   hues = seq(15, 375, length = n + 1)
   return(hcl(h = hues, c = 100, l = 65)[1:n])
 }
+
+
+#  ## Plot: Parallel coordinates - Pct
+#  proba1 <- proba[, !(colnames(proba) == "p_wo_mrd")]
+#  long_proba <- melt(proba1, id = c("pid", "label"),
+#                    variable.name = "feature")
+#             
+#  ax_parallel <- ggplot(long_proba,
+#                        aes(feature, value, colour = label, group = pid)) +
+#    geom_line(show.legend = F) +
+#    scale_color_manual(values = COL_LABEL)
+#  
+#  ## PLOT: CDF
+#  emp_cdf <- ggplot(proba, aes(x = p, colour = label)) +
+#    stat_ecdf(show.legend = F) +
+#    scale_color_manual(values = COL_LABEL)
+#  
+#  ## PLOT: RELATIVE RISK & ODDS RATIO
+#  p_sorted <- proba[order(proba$p),]
+#  p_sorted$label <- as.numeric(as.character(p_sorted$label))
+#  p_sorted$total_le <- rank(p_sorted$p, ties.method = "max")
+#  p_sorted$total_g <- nrow(p_sorted) - p_sorted$total_le
+#  p_sorted$relapse_le <- sapply(p_sorted$total_le,
+#                                function(i) sum(p_sorted$label[1:i]))
+#  p_sorted$relapse_g <- sum(p_sorted$label) - p_sorted$relapse_le
+#  
+#  p_sorted <- within(
+#    p_sorted,
+#    relative_risk <- (relapse_le/total_le) / (relapse_g/total_g)
+#  )
+#  
+#  p_sorted <- within(
+#    p_sorted,
+#    odds_ratio <- (relapse_le/(total_le-relapse_le)) / (relapse_g/(total_g-relapse_g))
+#  )
+#                                 
+#  ax_rr_or <- ggplot(p_sorted) +
+#    geom_step(aes(p, relative_risk, colour = "RR"), direction = "hv") + 
+#    geom_step(aes(p, odds_ratio, colour = "OR"), direction = "hv") +
+#    scale_color_manual("",
+#                       breaks = c("RR", "OR"),
+#                       values = c("RR" = "orange", "OR" = "steelblue3")) +
+#    theme(axis.title.y = element_blank())
+#  
+#  ## Plot: ROC
+#  # ERM1 evaluated is not from global GSS model
+#  proba_x <- cbind(proba, erm = X_predict$erm1, d33_mrd = X_predict$mrd) # subset mrd
+#                                
+#  x_names <- c("p", "erm", "d33_mrd")
+#  # WARNING: Change bigger.positive according to features!
+#  bigger.positive <- c(F, T, F) # bigger means relapse
+#  
+#  # ROC can only be plotted when there are both positive and negative samples
+#  if (all(table(proba_x$label) != 0)) {
+#    ax_roc <- plot_roc(proba_x, "label", x_names)
+#    # Able to plot ROC
+#    ax2 <- plot_grid(ax_parallel, ax_roc,
+#                     ncol = 2, rel_widths = c(1.8, 1))
+#  } else{
+#    ax2 <- ax_parallel # unable to plot ROC
+#  }
+#  
+#  # Plot: MRD v.s. Risk of relapse
+#  mrd_p <- ggplot(proba_x) +
+#    geom_point(aes(p, log10(d33_mrd), colour = label),
+#               cex = 3, show.legend = F) +
+#    scale_color_manual(values = COL_LABEL)
+#                                
+#  ax1 <- plot_grid(ax_jitter, mrd_p,
+#                   ncol = 2, rel_widths = c(2.8, 1))
+#  
+#  fig <- plot_grid(ax1, ax2, nrow = 2)

@@ -243,6 +243,175 @@ compute_features <- function(
 
 }
 
+#' Calculate probability of remission as percentage of remission cases with
+#' scores that are worse than or equal to the current score. Dataframes are
+#' assumed to only have selected features.
+#'
+#' @param X_train dataframe of training set (incl. MRD) with patients x features
+#' @param X_predict dataframe containing samples to be predicted (incl. MRD)
+#' @param metadata_pid dataframe of metadata with patient x info
+#' @param direction character vector containing "<", ">". "<" indicates that a 
+#' larger feature value indicates a higher probability of remission.
+#' @param samples numeric indicating no. of samples to augment. Defaults to NA.
+calc_p_remission_x_v2 <- function(
+  X_train, X_predict, metadata_pid, direction, samples
+) {
+  #' Helper function that calculates probability of remission as the number of
+  #' of remission cases with a score worse than or equal to the current score
+  #' for each feature.
+  #'
+  #' @param x vector of feature scores from diff samples
+  #' @param x_train vector of feature scores from remission samples training set
+  #' @param direction character of either "<" or ">"
+  calc_p_remission_xi <- function(x, x_train, direction) {
+    p_remission <- if (direction == "<") {
+      sapply(x, function(x_i) sum(x_i >= x_train) / length(x_train))
+    } else if (direction == ">") {
+      sapply(x, function(x_i) sum(x_i <= x_train) / length(x_train))
+    }
+    p_remission
+  }
+
+  X_remission <- X_train[
+    metadata_pid[rownames(X_train), "label"] == 0, , drop = F
+  ]
+  n <- nrow(X_remission)
+  print(sprintf("No. of remission samples in training set = %d", n))
+  
+  if (!is.null(samples)) {
+    # Estimate parameters of P(x_i|s, y) ~ Normal
+    # assert: X_remission is dataframe
+    mu_vec <- sapply(X_remission, median)
+    sigma_vec <- sapply(X_remission, sd)
+    simulated_data <- mapply(
+      function(mu, sigma) rnorm(samples, mu, sigma),
+      mu_vec, sigma_vec
+    )
+    X_remission <- rbind(X_remission, simulated_data)
+    print(sprintf("Simulated %d samples.", samples))
+  }  
+
+  p_remission_xi <- data.frame(mapply(
+    calc_p_remission_xi,
+    data.frame(X_predict),
+    data.frame(X_remission),
+    as.list(direction),
+    SIMPLIFY = F
+  ))
+  rownames(p_remission_xi) <- rownames(X_predict)
+  
+  # Without MRD
+  p_remission_xi_wo_mrd <- p_remission_xi[
+    , colnames(p_remission_xi) != "log_mrd"
+  ]
+  p_remission_wo_mrd <- rowMeans(p_remission_xi_wo_mrd, na.rm = T)
+  
+  # Arithmetic average
+  p_remission <- rowMeans(p_remission_xi, na.rm = T)
+  # Geometric average
+  p_geomavg <- apply(p_remission_xi, 1, function(x) exp(mean(log(x))))
+  
+  label <- as.factor(metadata_pid[rownames(X_predict), "label"])
+
+  data.frame(
+    pid = rownames(p_remission_xi),
+    p_remission_xi,
+    p = p_remission,
+    p_wo_mrd = p_remission_wo_mrd,
+    label = label
+  )
+}
+
+
+
+#' @param X_train dataframe of training set (incl. MRD) with patients x features
+#' @param Y dataframe of metadata with samples x info
+#' @param bigpos_names vector of feature names where bigger is positive
+#' @param smallpos_names vector of feature names where smaller is positive
+#' @param X_test dataframe of test set (incl. MRD)
+predict_plot_v2 <- function(
+  X_train, metadata_pid, direction, samples, X_test = NULL
+) {  
+  # assert: X_train does not have NA MRD values
+  # assert: features have been selected
+
+  # If test set is present, predict test set
+  if (is.null(X_test)) {
+    X_predict <- X_train
+  } else {
+    X_predict <- X_test
+  }
+  
+  p_remission <- calc_p_remission_x_v2(
+    X_train, X_predict, metadata_pid, direction, samples
+  )
+  
+  # Concatenate features and probabilities
+  X_y <- cbind(
+    X_predict,
+    p = p_remission$p,
+    # p_wo_mrd = p_remission$p_wo_mrd,
+    label = p_remission$label
+  )
+  
+  list(
+    p = p_remission[, "p", drop = F], # OPTION!
+    p_remission = p_remission,
+    X_y = X_y
+  )
+}
+
+
+#' Does not perform PCA transform on data
+#' Used to predict relapse for all subtypes
+#' X df containing all subtypes of patients in arg: pid and normal patients
+#' @param pid vector of pid belonging to both D0 and D8 patients (identically ordered)
+#' @return list containing prediction plot and vector coordinates
+predict_pipeline_v2 <- function(
+  X_subtype, X_normal,
+  annot_sid, annot_pid,
+  batch_genes = NULL,
+  class_genes = NULL,
+  samples = NULL
+) {
+  sid_remission <- colnames(X_subtype)[
+    annot_sid[colnames(X_subtype), "label"] == 0
+  ]
+  
+  if (is.null(class_genes))  
+    class_genes <- getLocalGenes(X_subtype, sid_remission)
+ 
+  if (is.null(batch_genes)) {
+    selected_genes <- class_genes
+  } else {
+    selected_genes <- setdiff(class_genes, batch_genes)
+  }
+  
+  print(c("No. of selected genes = ", length(class_genes)))
+  print(c("No. of final genes = ", length(selected_genes)))
+  
+  # Subtype and normal samples
+  response <- t(X_subtype[selected_genes, ])
+  normal <- t(X_normal[selected_genes, ])
+  
+  # Collate MRD results as well
+  V <- compute_features(response, normal, colnames(X_subtype), sid_remission)
+  V$log_mrd <- log10(annot_pid[rownames(V), "d33_mrd"])
+  
+  # Select features and specify order
+  features <- c("erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal", "log_mrd")
+  direction <- c("<", "<", ">", ">")
+  prediction_obj <- predict_plot_v2(
+    V[, features], metadata_pid, direction, samples
+  )
+
+  # treatment_col <- annot_pid[
+  #   rownames(prediction_obj$X_y), "treatment_type", drop = F
+  # ]
+  # prediction_obj$X_y <- cbind(prediction_obj$X_y, treatment_col)
+  return(prediction_obj)
+}
+
 
 #' Calculate probability of remission as percentage of remission cases with
 #' scores that are worse than or equal to the current score
@@ -260,10 +429,7 @@ calc_p_remission_x <- function(X_train, Y,
   #' @param x vector of feature scores from diff samples
   #' @param x_remission vector of feature scores from relapse samples
   calc_pct_remission_xi <- function(x, x_remission) {
-    sapply(
-      x,
-      function(x_i) sum(x_i <= x_remission) / length(x_remission)
-    )
+    sapply(x, function(x_i) sum(x_i <= x_remission) / length(x_remission))
   }
 
   #' Standardises features so that bigger values indicate positive label
@@ -318,6 +484,7 @@ calc_p_remission_x <- function(X_train, Y,
 }
 
 
+
 #' ASSUMPTION: X_train is filtered of NA MRD values and contains all features!
 #' @param X_train dataframe of training set (incl. MRD) with patients x features
 #' @param Y dataframe of metadata with samples x info
@@ -349,7 +516,6 @@ predict_plot <- function(X_train, Y,
   
   # Select p(remission|x)
   p <- proba[, "p", drop = F] # OPTION!
-  colnames(p) <- "p_rem"
   # Concatenate features and probabilities
   X_y <- cbind(
     X_fltr_predict,
@@ -360,146 +526,10 @@ predict_plot <- function(X_train, Y,
   X_y$mrd <- log10(X_y$mrd) # log-transform mrd
   colnames(X_y)[colnames(X_y) == "mrd"] <- "log_mrd"
 
-  long_X_y <- melt(X_y, id = "label", variable.name = "feature")             
-  
-  FEAT_ORDER <- c(
-    "erm1_ratio2", "l2norm_ratio2",
-    "angle_d0d8_d0normal", "log_mrd", "p_rem"
-  )
-  FEAT_LABS <- c(
-    "'ERM Ratio'", "'ARM Ratio'", "theta",
-    "log[10](MRD)", "paste('P(Remission|', bold(x), ')')"
-  )
-  long_X_y$feature <- factor(
-    long_X_y$feature,
-    levels = FEAT_ORDER,
-    labels = FEAT_LABS
-  ) # Reorder levels
-
-  ##### PLOTS #####
-  ax_jitter <- ggplot(
-    long_X_y,
-    aes(x = feature, y = value, colour = label)
-  ) +
-    geom_boxplot(alpha = 0, show.legend = F) +
-    geom_point(position = position_jitterdodge(),
-               cex = 2, show.legend = F) +
-    scale_color_manual(values = COL_LABEL) +
-    facet_wrap(
-      ~feature,
-      nrow = 1, scales = "free",
-      labeller = label_parsed
-    ) +
-    theme(
-      axis.title.x = element_blank(),
-      axis.text.x = element_blank(),
-      axis.title.y = element_blank(),
-      legend.position = "none"
-    )
-  
-  # Jitter plot: p-value label
-  # Both group sizes must be > 1
-  if (length(table(X_y$label)) > 1 && min(table(X_y$label)) > 1) {
-    list_p_rem <- split(X_y$p_rem, X_y$label)
-    
-    try({
-      ttest <- t.test(list_p_rem[[1]], list_p_rem[[2]])
-      p_lab <- sprintf("p = %.3f", ttest$p.value)
-      
-      ann_text <- data.frame(
-        feature = factor(
-          FEAT_ORDER[5],
-          levels = FEAT_ORDER,
-          labels = FEAT_LABS
-        ),
-        value = Inf,
-        lab =  p_lab
-      )
-
-      ax_jitter <- ax_jitter +
-        geom_text(data = ann_text,
-                  aes(x = feature, y = value, label = lab),
-                  size = 3, colour = "black",
-                  vjust = 3, hjust = -0.1)
-      })
-  }
-  
-  ## Plot: Parallel coordinates - Pct
-  proba1 <- proba[, !(colnames(proba) == "p_wo_mrd")]
-  long_proba <- melt(proba1, id = c("pid", "label"),
-                    variable.name = "feature")
-             
-  ax_parallel <- ggplot(long_proba,
-                        aes(feature, value, colour = label, group = pid)) +
-    geom_line(show.legend = F) +
-    scale_color_manual(values = COL_LABEL)
-  
-  ## PLOT: CDF
-  emp_cdf <- ggplot(proba, aes(x = p, colour = label)) +
-    stat_ecdf(show.legend = F) +
-    scale_color_manual(values = COL_LABEL)
-  
-  ## PLOT: RELATIVE RISK & ODDS RATIO
-  p_sorted <- proba[order(proba$p),]
-  p_sorted$label <- as.numeric(as.character(p_sorted$label))
-  p_sorted$total_le <- rank(p_sorted$p, ties.method = "max")
-  p_sorted$total_g <- nrow(p_sorted) - p_sorted$total_le
-  p_sorted$relapse_le <- sapply(p_sorted$total_le,
-                                function(i) sum(p_sorted$label[1:i]))
-  p_sorted$relapse_g <- sum(p_sorted$label) - p_sorted$relapse_le
-  
-  p_sorted <- within(
-    p_sorted,
-    relative_risk <- (relapse_le/total_le) / (relapse_g/total_g)
-  )
-  
-  p_sorted <- within(
-    p_sorted,
-    odds_ratio <- (relapse_le/(total_le-relapse_le)) / (relapse_g/(total_g-relapse_g))
-  )
-                                 
-  ax_rr_or <- ggplot(p_sorted) +
-    geom_step(aes(p, relative_risk, colour = "RR"), direction = "hv") + 
-    geom_step(aes(p, odds_ratio, colour = "OR"), direction = "hv") +
-    scale_color_manual("",
-                       breaks = c("RR", "OR"),
-                       values = c("RR" = "orange", "OR" = "steelblue3")) +
-    theme(axis.title.y = element_blank())
-  
-  ## Plot: ROC
-  # ERM1 evaluated is not from global GSS model
-  proba_x <- cbind(proba, erm = X_predict$erm1, d33_mrd = X_predict$mrd) # subset mrd
-                                
-  x_names <- c("p", "erm", "d33_mrd")
-  # WARNING: Change bigger.positive according to features!
-  bigger.positive <- c(F, T, F) # bigger means relapse
-  
-  # ROC can only be plotted when there are both positive and negative samples
-  if (all(table(proba_x$label) != 0)) {
-    ax_roc <- plot_roc(proba_x, "label", x_names)
-    # Able to plot ROC
-    ax2 <- plot_grid(ax_parallel, ax_roc,
-                     ncol = 2, rel_widths = c(1.8, 1))
-  } else{
-    ax2 <- ax_parallel # unable to plot ROC
-  }
-  
-  # Plot: MRD v.s. Risk of relapse
-  mrd_p <- ggplot(proba_x) +
-    geom_point(aes(p, log10(d33_mrd), colour = label),
-               cex = 3, show.legend = F) +
-    scale_color_manual(values = COL_LABEL)
-                                
-  ax1 <- plot_grid(ax_jitter, mrd_p,
-                   ncol = 2, rel_widths = c(2.8, 1))
-  
-  fig <- plot_grid(ax1, ax2, nrow = 2)
-  
   list(
-    p_rem = p,
+    p = p,
     P = proba,
-    X_y = X_y,
-    plot = fig
+    X_y = X_y
   )
 }
 
