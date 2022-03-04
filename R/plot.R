@@ -278,19 +278,23 @@ plot_vectors <- function(
 }
 
 
-#' Plots boxplot of features, p_rem WITHOUT global ERM
+#' Plots boxplot of features
 #' Provides p-values from wilcoxon rank-sum test
 plot_boxplots <- function(X_y) {
+  # WARNING: Manual inputted values 
   FEAT_ORDER <- c(
     "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
-    "log_mrd", "p"
+    "log_mrd_d33", "p_d8", "p_d33"
   )
   FEAT_LABS <- c(
     "'ERM Ratio'", "'ARM Ratio'", "theta",
-    "log[10](MRD)", "paste('P(Remission|', bold(x), ', s)')"
+    "log[10](MRD)", "paste('P(Remission|', x[D8], ', s)')",
+    "paste('P(Remission|', x[D33], ', s)')"
   )
+  # TODO: Check column names of X_y
   
-  long_X_y <- melt(X_y, id = "label", variable.name = "feature")
+  X_y <- rownames_to_column(X_y)
+  long_X_y <- melt(X_y, id = c("label", "rowname"), variable.name = "feature")
   # Reorder levels and label features
   long_X_y$feature <- factor(
     long_X_y$feature,
@@ -301,7 +305,7 @@ plot_boxplots <- function(X_y) {
   
   ax_jitter <- ggplot(
     long_X_y,
-    aes(x = label, y = value)
+    aes(x = label, y = value, label = rowname)
   ) +
     geom_boxplot(
       aes(group = label),
@@ -310,11 +314,17 @@ plot_boxplots <- function(X_y) {
     ) +
     geom_point(
       aes(fill = label),
-      position = position_jitterdodge(jitter.width = 1),
+      position = position_jitterdodge(jitter.width = 1, seed = 1),
       cex = 2.5, pch = 21, alpha = 1,
-      col = "black", show.legend = F
+      col = "black", show.legend = FALSE
     ) +
+    # geom_text(
+    #   aes(col = label),
+    #   position = position_jitterdodge(jitter.width = 1, seed = 1),
+    #   cex = 2.5, show.legend = FALSE
+    # ) + 
     scale_fill_manual(values = COL_LABEL) +
+    scale_color_manual(values = COL_LABEL) +
     facet_wrap(
       ~feature,
       nrow = 1, scales = "free",
@@ -349,6 +359,7 @@ plot_boxplots <- function(X_y) {
       }
     )
     
+    # WARNING: Manual inputted values 
     ann_text <- data.frame(
       feature = factor(
         FEAT_ORDER,
@@ -360,7 +371,8 @@ plot_boxplots <- function(X_y) {
         max(X_y[FEAT_ORDER[2]]),
         min(X_y[FEAT_ORDER[3]]),        
         min(X_y[FEAT_ORDER[4]]),
-        max(X_y[FEAT_ORDER[5]])
+        max(X_y[FEAT_ORDER[5]]),
+        max(X_y[FEAT_ORDER[6]])
       ),
       lab = p_labs
     )
@@ -374,6 +386,66 @@ plot_boxplots <- function(X_y) {
         hjust = 0
       )
   }
+  
+  ax_jitter
+}
+
+
+#' Plots boxplots according to colour and shape provided
+#' No statistical tests conducted between groups.
+#' Plots both proba (D8) and (D33)
+#' @param colour_by string indicating name feature to group colour by
+plot_boxplots_v2 <- function(X_y, colour_by, shape_by) {
+  FEAT_ORDER <- c(
+    "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
+    "log_mrd_d33", "p_d8", "p_d33"
+  )
+  FEAT_LABS <- c(
+    "'ERM Ratio'", "'ARM Ratio'", "theta",
+    "log[10](MRD)", "paste('P(Remission|', bold(x[D8]), ', s)')",
+    "paste('P(Remission|', bold(x[D33]), ', s)')"
+  )
+ 
+  print(colnames(X_y))
+ 
+  long_X_y <- melt(
+    X_y,
+    id = c(colour_by, shape_by),
+    variable.name = "feature"
+  )
+  # Reorder levels and label features
+  long_X_y$feature <- factor(
+    long_X_y$feature,
+    levels = FEAT_ORDER,
+    labels = FEAT_LABS
+  )
+  
+  ax_jitter <- ggplot(
+    long_X_y,
+    aes_string(x = colour_by, y = "value")
+  ) +
+    # geom_boxplot(
+    #   aes_string(group = colour_by),
+    #   col = "black", alpha = 0,
+    #   show.legend = F
+    # ) +
+    geom_point(
+      aes_string(fill = colour_by, shape = shape_by),
+      position = position_jitterdodge(jitter.width = 1),
+      cex = 2.5, alpha = 1, show.legend = F
+    ) +
+    scale_shape_manual(values = 21:22) +
+    facet_wrap(
+      ~feature,
+      nrow = 1, scales = "free",
+      labeller = label_parsed
+    ) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(angle = 15),
+      axis.title.y = element_blank(),
+      legend.position = "none"
+    )
   
   ax_jitter
 }
@@ -653,6 +725,320 @@ get_rownames <- function(obj) {
 ggplot_palette <- function(n) {
   hues = seq(15, 375, length = n + 1)
   return(hcl(h = hues, c = 100, l = 65)[1:n])
+}
+
+
+#' @param treatment character indicating treatment or treatment_current
+#' to use for scoring and as fill color
+plot_barchart1 <- function(
+  D, timepoint,
+  treatment = c("treatment", "treatment_current"),
+  ylim = c(0, 30),
+  show.legend = F
+) {
+  treatment <- match.arg(treatment)
+
+  # Fill colours
+  colors <- c("dodgerblue", "chartreuse3", "tomato")
+  risk_levels <- c("SR", "IR", "HR")
+  names(colors) <- risk_levels
+  
+  # Mutating D
+  D$prediction <- factor(D$prediction, levels = risk_levels)
+  D$final_treatment <- factor(
+    sprintf("%s (%d)", D$treatment, D$scores)
+  )
+  D$final_scores <- ifelse(D$scores == 0, "0", "1/2")
+  
+  # Awarding theoretical scores
+  D1 <- D[c("label", treatment)] # final or current treatment
+  colnames(D1)[2] <- "treatment"
+  theoretical_scoring_table <- data.frame(
+    label = rep(c("Remission", "Relapse"), each = 3),
+    treatment = rep(risk_levels, 2),
+    final_scores = c("1/2", "1/2", "1/2", "0", "0", "1/2")
+  )
+  D2 <- merge(D1, theoretical_scoring_table, by = c("label", "treatment"))
+  
+  ggplot(D) +
+    facet_grid(label ~ final_scores) +
+    geom_bar(
+      aes_string(fill = treatment, x = "prediction"), # final or current treatment
+      show.legend = show.legend
+    ) +
+    geom_bar(
+      data = D2,
+      aes(x = treatment),
+      alpha = 0, fill = "white", color = "black",
+      show.legend = show.legend
+    ) +
+    scale_fill_manual(values = colors) +
+    # TODO: Change labels  
+    labs(
+      title = sprintf(
+        "%s Scores (Total: %d/%d)",
+        timepoint, sum(D$scores), nrow(D) * 2
+      ),
+      x = "Predicted risk level", y = "Count",
+      fill = "Final treatment (Score)",
+      col = "Treatment (for scoring)",
+      linetype = "Outcome"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+#       axis.title.x = element_blank(),
+      axis.text.x = element_text(angle = 15)
+    ) +
+    ylim(ylim)
+}
+
+
+#' @param treatment character indicating treatment or treatment_current
+#' to use for scoring and as fill color
+plot_barchart1a <- function(
+  D, timepoint,
+  treatment = c("treatment", "treatment_current"),
+  ylim = c(0, 35),
+  show.legend = F
+) {
+  treatment <- match.arg(treatment)
+  treatment_caption <- ifelse(
+    treatment == "treatment", "Final treatment", "Current treatment"
+  )
+  # Fill colours
+  colors <- c("dodgerblue", "chartreuse3", "tomato")
+  risk_levels <- c("SR", "IR", "HR")
+  names(colors) <- risk_levels
+  
+  # Mutating D
+  D$prediction <- factor(D$prediction, levels = risk_levels)
+  
+  # Awarding theoretical scores
+  D1 <- D[c("label", treatment)] # final or current treatment
+  colnames(D1)[2] <- "treatment"
+  theoretical_scoring_table <- data.frame(
+    label = rep(c("Remission", "Relapse"), each = 3),
+    treatment = rep(risk_levels, 2),
+    scores = c("1", "1", "1", "0", "0", "1")
+  )
+  D2 <- merge(D1, theoretical_scoring_table, by = c("label", "treatment"))
+  
+  ggplot(D) +
+    facet_grid(label ~ scores) +
+    geom_bar(
+      aes_string(fill = treatment, x = "prediction"), # final or current treatment
+      show.legend = show.legend
+    ) +
+    geom_bar(
+      data = D2, aes(x = treatment),
+      alpha = 0, color = "black", show.legend = show.legend
+    ) +
+    scale_fill_manual(values = colors) +
+    # TODO: Change labels  
+    labs(
+      title = sprintf(
+        "%s Scores (Total: %d/%d)",
+        timepoint, sum(D$scores), nrow(D)
+      ),
+      x = "Predicted risk level", y = "Count",
+      fill = treatment_caption 
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text.x = element_text(angle = 15)
+    ) +
+    ylim(ylim)
+}
+
+
+plot_barchart2 <- function(D, counts, timepoint, show.legend = F) {
+  # Fill colours
+  treatment_score <- c(
+    "HR (0)", "IR (0)", "SR (0)",
+    "HR (1)", "IR (1)", "SR (1)",
+    "HR (2)", "IR (2)", "SR (2)" 
+  )
+  fill_colors <- c(
+    "tomato", "chartreuse3", "dodgerblue",
+    "salmon", "yellowgreen", "skyblue",
+    "tomato3", "springgreen4", "steelblue"
+  )
+  names(fill_colors) <- treatment_score
+  
+  # Line colours
+  colors <- c("blue", "green", "red")
+  risk_levels <- c("SR", "IR", "HR")
+  names(colors) <- risk_levels
+  
+  D$final_treatment <- factor(
+    sprintf("%s (%d)", D$treatment, D$scores),
+    levels = treatment_score
+  )
+  D$final_scores <- ifelse(D$scores == 0, "0", "1/2")
+  
+  print(counts)
+  ggplot(D) +
+    facet_wrap(~final_scores) +
+    geom_bar(
+      aes(x = label, fill = final_treatment),
+      position = "stack", show.legend = show.legend
+    ) +
+    geom_bar(
+      data = counts,
+      aes(x = label, y = n, col = treatment),
+      stat = "identity", alpha = 0, show.legend = show.legend
+    ) +
+    scale_shape_manual(values = c(21, 22, 24)) +
+    scale_fill_manual(values = c(fill_colors, colors)) +
+    scale_color_manual(values = colors) +
+    scale_linetype_manual(values = c("solid", "longdash")) +
+    labs(
+      title = sprintf(
+        "%s Scores (Total: %d/%d)",
+        timepoint, sum(D$scores), nrow(D) * 2
+      ),
+      y = "Count",
+      fill = "Final treatment (Score)",
+      col = "Treatment (for scoring)",
+      linetype = "Outcome"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(angle = 15)
+    ) +
+    ylim(0, 50)
+}
+
+
+#' Fill: Final treatment / current treatment
+plot_barchart2a <- function(
+  D, counts, timepoint,
+  treatment = c("treatment", "treatment_current"),
+  show.legend = F
+) {
+  treatment <- match.arg(treatment)
+  
+  # Fill colours
+  treatment_score <- c(
+    "HR (0)", "HR (1)", "HR (2)",
+    "IR (0)", "IR (1)", "IR (2)",
+    "SR (0)", "SR (1)", "SR (2)"
+  )
+  fill_colors <- c(
+    "tomato", "salmon", "tomato3",
+    "chartreuse3", "yellowgreen", "springgreen4",
+    "dodgerblue", "skyblue", "steelblue"
+  )
+  names(fill_colors) <- treatment_score
+  
+  # Line colours
+  colors <- c("blue", "green", "red")
+  risk_levels <- c("SR", "IR", "HR")
+  names(colors) <- risk_levels
+  
+  # Final/current treatment combined with score
+  D$final_treatment <- factor(
+    sprintf("%s (%d)", D[, treatment], D$scores),
+    levels = treatment_score
+  )
+  D$final_scores <- ifelse(D$scores == 0, "0", "1/2")
+  
+  ggplot(D) +
+    facet_wrap(~final_scores) +
+    geom_bar(
+      aes(x = label, fill = final_treatment),
+      position = "stack", show.legend = show.legend
+    ) +
+    geom_bar(
+      data = counts,
+      aes(x = label, y = n, col = treatment),
+      stat = "identity", alpha = 0, show.legend = show.legend
+    ) +
+    scale_shape_manual(values = c(21, 22, 24)) +
+    scale_fill_manual(values = c(fill_colors, colors)) +
+    scale_color_manual(values = colors) +
+    scale_linetype_manual(values = c("solid", "longdash")) +
+    labs(
+      title = sprintf(
+        "%s Scores (Total: %d/%d)",
+        timepoint, sum(D$scores), nrow(D) * 2
+      ),
+      y = "Count",
+      fill = "Final treatment (Score)",
+      col = "Treatment (for scoring)",
+      linetype = "Outcome"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(angle = 15)
+    ) +
+    ylim(0, 50)
+}
+
+
+#' Fill: Prediction (score)
+plot_barchart3 <- function(D, counts, timepoint, show.legend = F) {
+  # Fill colours
+  treatment_score <- c(
+    "HR (0)", "HR (1)", "HR (2)",
+    "IR (0)", "IR (1)", "IR (2)",
+    "SR (0)", "SR (1)", "SR (2)"
+  )
+  fill_colors <- c(
+    "tomato", "salmon", "tomato3",
+    "chartreuse3", "yellowgreen", "springgreen4",
+    "dodgerblue", "skyblue", "steelblue"
+  )
+  names(fill_colors) <- treatment_score
+  
+#   fill_colors <- c("skyblue", "yellowgreen", "salmon")
+#   risk_levels <- c("SR", "IR", "HR")
+#   names(fill_colors) <- risk_levels
+  
+  # Line colours
+  colors <- c("blue", "green", "red")
+  risk_levels <- c("SR", "IR", "HR")
+  names(colors) <- risk_levels
+  
+  D$prediction_score <- factor(
+    sprintf("%s (%d)", D$prediction, D$scores),
+    levels = treatment_score
+  )
+  D$final_scores <- ifelse(D$scores == 0, "0", "1/2")
+  
+  ggplot(D) +
+    facet_wrap(~final_scores) +
+    geom_bar(
+      aes(x = label, fill = prediction_score),
+      position = "stack", show.legend = show.legend
+    ) +
+    geom_bar(
+      data = counts,
+      aes(x = label, y = n, col = treatment),
+      stat = "identity", alpha = 0, show.legend = show.legend
+    ) +
+    scale_shape_manual(values = c(21, 22, 24)) +
+    scale_fill_manual(values = fill_colors) +
+    scale_color_manual(values = colors) +
+    scale_linetype_manual(values = c("solid", "longdash")) +
+    labs(
+      title = sprintf(
+        "%s Scores (Total: %d/%d)",
+        timepoint, sum(D$scores), nrow(D) * 2
+      ),
+      y = "Count",
+      fill = "Final treatment (Score)",
+      col = "Treatment (for scoring)",
+      linetype = "Outcome"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(angle = 15)
+    ) +
+    ylim(0, 50)
 }
 
 

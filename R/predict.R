@@ -254,7 +254,7 @@ compute_features <- function(
 #' larger feature value indicates a higher probability of remission.
 #' @param samples numeric indicating no. of samples to augment. Defaults to NA.
 calc_p_remission_x_v2 <- function(
-  X_train, X_predict, metadata_pid, direction, samples
+  X_train, X_predict, metadata_pid, direction, samples, include_tp2
 ) {
   #' Helper function that calculates probability of remission as the number of
   #' of remission cases with a score worse than or equal to the current score
@@ -272,12 +272,17 @@ calc_p_remission_x_v2 <- function(
     p_remission
   }
 
+  # assert that X_train does not have null values
+  if (sum(is.na(X_train)) != 0 | sum(is.na(X_predict)) != 0)
+    stop("Missing values present in either the training or test set.")
+  
   X_remission <- X_train[
     metadata_pid[rownames(X_train), "label"] == 0, , drop = F
   ]
   n <- nrow(X_remission)
   print(sprintf("No. of remission samples in training set = %d", n))
   
+  # Augment data by simulating samples 
   if (!is.null(samples)) {
     # Estimate parameters of P(x_i|s, y) ~ Normal
     # assert: X_remission is dataframe
@@ -299,65 +304,27 @@ calc_p_remission_x_v2 <- function(
     SIMPLIFY = F
   ))
   rownames(p_remission_xi) <- rownames(X_predict)
+  colnames(p_remission_xi) <- paste0("p_", colnames(p_remission_xi))
   
   # Without MRD
-  p_remission_xi_wo_mrd <- p_remission_xi[
-    , colnames(p_remission_xi) != "log_mrd"
-  ]
-  p_remission_wo_mrd <- rowMeans(p_remission_xi_wo_mrd, na.rm = T)
-  
-  # Arithmetic average
-  p_remission <- rowMeans(p_remission_xi, na.rm = T)
-  # Geometric average
-  p_geomavg <- apply(p_remission_xi, 1, function(x) exp(mean(log(x))))
+  # ASSERT: Columns 5, 6 are D33, TP2 MRD
+  p_d8 <- rowMeans(p_remission_xi[1:3], na.rm = T)
+  p_d33 <- rowMeans(p_remission_xi[1:4], na.rm = T)
   
   label <- as.factor(metadata_pid[rownames(X_predict), "label"])
-
-  data.frame(
-    pid = rownames(p_remission_xi),
-    p_remission_xi,
-    p = p_remission,
-    p_wo_mrd = p_remission_wo_mrd,
-    label = label
-  )
-}
-
-
-
-#' @param X_train dataframe of training set (incl. MRD) with patients x features
-#' @param Y dataframe of metadata with samples x info
-#' @param bigpos_names vector of feature names where bigger is positive
-#' @param smallpos_names vector of feature names where smaller is positive
-#' @param X_test dataframe of test set (incl. MRD)
-predict_plot_v2 <- function(
-  X_train, metadata_pid, direction, samples, X_test = NULL
-) {  
-  # assert: X_train does not have NA MRD values
-  # assert: features have been selected
-
-  # If test set is present, predict test set
-  if (is.null(X_test)) {
-    X_predict <- X_train
+  
+  if (include_tp2) {
+    p_tp2 <- rowMeans(p_remission_xi[1:5], na.rm = T)
+    proba <- data.frame(p_d8, p_d33, p_tp2, label)
   } else {
-    X_predict <- X_test
+    proba <- data.frame(p_d8, p_d33, label)
   }
-  
-  p_remission <- calc_p_remission_x_v2(
-    X_train, X_predict, metadata_pid, direction, samples
-  )
-  
-  # Concatenate features and probabilities
-  X_y <- cbind(
-    X_predict,
-    p = p_remission$p,
-    # p_wo_mrd = p_remission$p_wo_mrd,
-    label = p_remission$label
-  )
-  
+  # Geometric average
+  # p_geomavg <- apply(p_remission_xi, 1, function(x) exp(mean(log(x))))
+
   list(
-    p = p_remission[, "p", drop = F], # OPTION!
-    p_remission = p_remission,
-    X_y = X_y
+    p_remission_xi = p_remission_xi,
+    p = proba
   )
 }
 
@@ -368,27 +335,33 @@ predict_plot_v2 <- function(
 #' @param pid vector of pid belonging to both D0 and D8 patients (identically ordered)
 #' @return list containing prediction plot and vector coordinates
 predict_pipeline_v2 <- function(
-  X_subtype, X_normal,
-  annot_sid, annot_pid,
+  X_subtype,
+  X_normal,
+  metadata_sid,
+  metadata_pid,
   batch_genes = NULL,
   class_genes = NULL,
-  samples = NULL
+  samples = NULL,
+  include_tp2 = FALSE
 ) {
   sid_remission <- colnames(X_subtype)[
-    annot_sid[colnames(X_subtype), "label"] == 0
+    metadata_sid[colnames(X_subtype), "label"] == 0
   ]
   
   if (is.null(class_genes))  
     class_genes <- getLocalGenes(X_subtype, sid_remission)
- 
+    # # Save drug response genes
+    # subtype <- unique(metadata_sid[colnames(X_subtype), "subtype"])
+    # writeLines(class_genes, sprintf("tmp/response-%s.txt", subtype))
+
   if (is.null(batch_genes)) {
     selected_genes <- class_genes
   } else {
     selected_genes <- setdiff(class_genes, batch_genes)
   }
   
-  print(c("No. of selected genes = ", length(class_genes)))
-  print(c("No. of final genes = ", length(selected_genes)))
+  cat(sprintf("No. of features selected = %d\n", length(class_genes)))
+  cat(sprintf("No. of final genes = %d\n", length(selected_genes)))
   
   # Subtype and normal samples
   response <- t(X_subtype[selected_genes, ])
@@ -396,177 +369,31 @@ predict_pipeline_v2 <- function(
   
   # Collate MRD results as well
   V <- compute_features(response, normal, colnames(X_subtype), sid_remission)
-  V$log_mrd <- log10(annot_pid[rownames(V), "d33_mrd"])
+  V$log_mrd_d33 <- log10(metadata_pid[rownames(V), "d33_mrd"])
   
-  # Select features and specify order
-  features <- c("erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal", "log_mrd")
-  direction <- c("<", "<", ">", ">")
-  prediction_obj <- predict_plot_v2(
-    V[, features], metadata_pid, direction, samples
-  )
-
-  # treatment_col <- annot_pid[
-  #   rownames(prediction_obj$X_y), "treatment_type", drop = F
-  # ]
-  # prediction_obj$X_y <- cbind(prediction_obj$X_y, treatment_col)
-  return(prediction_obj)
-}
-
-
-#' Calculate probability of remission as percentage of remission cases with
-#' scores that are worse than or equal to the current score
-#' @param X_train dataframe of training set (incl. MRD) with patients x features
-#' @param Y dataframe of metadata with samples x info
-#' @param bigpos_names vector of feature names where bigger is positive
-#' @param smallpos_names vector of feature names where smaller is positive
-#' @param X_predict dataframe containing samples to be predicted (incl. MRD)
-calc_p_remission_x <- function(X_train, Y,
-                             bigpos_names,
-                             smallpos_names,
-                             X_predict) {
-  #' Pct of remission cases with worse than or equal to the current score
-  #' Bigger values indicate it being worse
-  #' @param x vector of feature scores from diff samples
-  #' @param x_remission vector of feature scores from relapse samples
-  calc_pct_remission_xi <- function(x, x_remission) {
-    sapply(x, function(x_i) sum(x_i <= x_remission) / length(x_remission))
-  }
-
-  #' Standardises features so that bigger values indicate positive label
-  select_orientate_features <- function(X, bigpos_names, smallpos_names) {
-    # Assumption: Either smallpos_names or bigpos_names will not be NULL
-    if (is.null(smallpos_names)) {
-      return(X[, bigpos_names, drop =  F])
-    } else if (is.null(bigpos_names)) {
-      # reverse order - bigger values now indicate relapse
-      return(-X[, smallpos_names, drop =  F])
-    } else {
-      return(cbind(-X[, smallpos_names, drop =  F],
-                   X[, bigpos_names, drop =  F]))
-    }
-  }
-  
-  X1_train <- select_orientate_features(X_train, bigpos_names, smallpos_names)
-  idx <- paste0(rownames(X1_train), "_D0") # in order to access metadata
-  Y1_train <- Y[idx, , drop = F]
-  X1_train_remission <- X1_train[Y1_train$label == 0,]  # Only remission
-
-  X1_predict <- select_orientate_features(X_predict, bigpos_names, smallpos_names)
-
-  pct_remission <- mapply(calc_pct_remission_xi,
-                          data.frame(X1_predict),
-                          data.frame(X1_train_remission),
-                          SIMPLIFY = F)
-  pct_remission <- data.frame(pct_remission)
-  rownames(pct_remission) <- rownames(X1_predict)
-  
-  # Without MRD
-  pct_wo_mrd <- pct_remission[, colnames(pct_remission) != "log_mrd"]
-  p_wo_mrd <- apply(pct_wo_mrd, 1, mean, na.rm = T)
-  
-  # Arithmetic average
-  p_avg <- apply(pct_remission, 1, mean, na.rm = T)
-  
-  # Geometric average
-  p_geomavg <- apply(pct_remission, 1, function(x) exp(mean(log(x))))
-                     
-  label <- as.factor(
-    Y[paste0(rownames(X1_predict), "_D0"), "label"]
-  )
-
-  data.frame(
-    pid = rownames(pct_remission),
-    label = label,
-    p = p_avg,
-    p_wo_mrd = p_wo_mrd,
-    pct_remission
-  )
-}
-
-
-
-#' ASSUMPTION: X_train is filtered of NA MRD values and contains all features!
-#' @param X_train dataframe of training set (incl. MRD) with patients x features
-#' @param Y dataframe of metadata with samples x info
-#' @param bigpos_names vector of feature names where bigger is positive
-#' @param smallpos_names vector of feature names where smaller is positive
-#' @param X_test dataframe of test set (incl. MRD)
-predict_plot <- function(X_train, Y,
-                         bigpos_names,
-                         smallpos_names,
-                         X_test = NULL) {  
-  # If test set is present, predict test set
-  if (is.null(X_test)) {
-    X_predict <- X_train
+  if (include_tp2) {
+    # Include MRD TP2
+    V$log_mrd_tp2 <- log10(metadata_pid[rownames(V), "wk12_mrd"]) 
+    features <- c(
+      "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
+      "log_mrd_d33", "log_mrd_tp2" 
+    )
+    direction <- c("<", "<", ">", ">", ">")  
+    X_train <- V[!is.na(V$log_mrd_tp2), features]
   } else {
-    X_predict <- X_test
+    # Select features and specify order
+    features <- c(
+      "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal", "log_mrd_d33" 
+    )
+    direction <- c("<", "<", ">", ">")  
+    X_train <- V[features] 
   }
   
-  p_remission_x <- calc_p_remission_x(
-    X_train, Y,
-    bigpos_names,
-    smallpos_names,
-    X_predict
+  prediction <- calc_p_remission_x_v2(
+    X_train, X_train, metadata_pid, direction, samples, include_tp2
   )
-  proba <- p_remission_x # OPTION!
-  
-  # Select features
-  X_fltr_train <- X_train[, c(bigpos_names, smallpos_names)]
-  X_fltr_predict <- X_predict[, c(bigpos_names, smallpos_names)]
-  
-  # Select p(remission|x)
-  p <- proba[, "p", drop = F] # OPTION!
   # Concatenate features and probabilities
-  X_y <- cbind(
-    X_fltr_predict,
-    p,
-    label = proba$label
-  )
+  X_y <- cbind(X_train, prediction$p)
   
-  list(
-    p = p,
-    p_remission = proba,
-    X_y = X_y
-  )
-}
-
-
-#' Does not perform PCA transform on data
-#' Used to predict relapse for all subtypes
-#' X df containing all subtypes of patients in arg: pid and normal patients
-#' @param pid vector of pid belonging to both D0 and D8 patients (identically ordered)
-#' @return list containing prediction plot and vector coordinates
-predict_pipeline <- function(X_subtype, X_normal,
-                             metadata, metadata_mrd,
-                             batch_genes = NULL) {
-  sid_remission <- colnames(X_subtype)[
-    metadata[colnames(X_subtype), "label"] == 0
-  ]
-  
-  class_genes <- getLocalGenes(X_subtype, sid_remission)
-  
-  if (is.null(batch_genes)) {
-    selected_genes <- class_genes
-  } else {
-    selected_genes <- setdiff(class_genes, batch_genes)
-  }
-  
-  print(c("No. of selected genes = ", length(class_genes)))
-  print(c("No. of final genes = ", length(selected_genes)))
-  
-  # Subtype and normal samples
-  response <- t(X_subtype[selected_genes, ])
-  normal <- t(X_normal[selected_genes, ])
-  
-  # Collate MRD results as well
-  V <- compute_features(response, normal, colnames(X_subtype), sid_remission)
-  V$log_mrd <- log10(metadata_mrd[rownames(V), "d33_mrd"])
-  
-  prediction_obj <- predict_plot(
-    V, metadata,                             
-    bigpos_names = "angle_d0d8_d0normal",
-    smallpos_names = c("erm1_ratio2", "l2norm_ratio2", "log_mrd")
-  )
-  
-  return(prediction_obj)
+  list(p_remission_xi = prediction$p_remission_xi, X_y = X_y)
 }

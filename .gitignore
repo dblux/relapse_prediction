@@ -2,6 +2,7 @@
 data/
 hist/
 dump/
+tmp/
 .ipynb_checkpoints/
 
 .Rhistory
