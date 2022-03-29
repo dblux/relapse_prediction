@@ -46,8 +46,9 @@ identify_batch_features <- function(
 # Prediction (Drug genes) --------------------------------------------
 ## Drug responsive genes
 #' @param X_subtype df of patients from a specific subtype (D0 followed by D8)
-getLocalGenes <- function(X_subtype, sid_remission,
-                          alpha = 0.05, EXPR = 6, N = 50, LOGFC = 1) {
+identify_DE <- function(
+  X_subtype, sid_remission, alpha = 0.05, EXPR = 6, N = 50, LOGFC = 1
+) {
   if (!is_paired(X_subtype))
     stop("Patient IDs are not paired..")
   
@@ -68,15 +69,19 @@ getLocalGenes <- function(X_subtype, sid_remission,
   # Median paired log-FC
   paired_logfc <- D8 - D0
   median_logfc <- apply(paired_logfc, 1, median)
-  print(sprintf("No. of NaN values in log-fc = %d",
-                 sum(is.na(median_logfc))))
+  cat(sprintf(
+    "No. of NaN values in log-fc = %d\n",
+    sum(is.na(median_logfc))
+  ))
   median_logfc1 <- median_logfc[!is.na(median_logfc)]
   
   d0_mu <- rowMeans(D0)
   d8_mu <- rowMeans(D8)
   selected_median_logfc <- median_logfc1[d0_mu > EXPR | d8_mu > EXPR]
-  print(sprintf("No. of probesets excluded by expr threshold = %d",
-                length(median_logfc1) - length(selected_median_logfc)))
+  cat(sprintf(
+    "No. of probesets excluded by expr threshold = %d\n",
+    length(median_logfc1) - length(selected_median_logfc)
+  ))
   # feat_top_median_logfc <- names(head(sort(selected_median_logfc), N))
   
   # # Custom t-statistic
@@ -90,10 +95,10 @@ getLocalGenes <- function(X_subtype, sid_remission,
   feat_p <- names(pvalue)[pvalue < alpha & !is.na(pvalue)]
   # At least one of the means have to be > EXPR
   feat_log2fc <- names(selected_median_logfc)[abs(selected_median_logfc) > LOGFC]
-  print(sprintf("No. of features (p-value) = %d", length(feat_p)))
-  print(sprintf("No. of features (log2-fc) = %d", length(feat_log2fc)))
-  feat <- intersect(feat_p, feat_log2fc)
-  return(feat)
+  cat(sprintf("No. of features (p-value) = %d\n", length(feat_p)))
+  cat(sprintf("No. of features (log2-fc) = %d\n", length(feat_log2fc)))
+
+  intersect(feat_p, feat_log2fc)
 }
 
 
@@ -119,7 +124,7 @@ compute_features <- function(
     list(rownames(d0_df), sid_train, sid_remission)
   )
   
-  print(sprintf("NO. OF SAMPLES IN CENTROID: %d", length(sid_leuk)))
+  cat(sprintf("No. of samples in centroid = %d\n", length(sid_leuk)))
   leuk_centroid <- apply(d0_df[sid_leuk, , drop = F], 2, median)
   normal_centroid <- apply(normal_df, 2, median)
   
@@ -240,7 +245,6 @@ compute_features <- function(
   
   rownames(features_df) <- substring(rownames(features_df), 1, 4)
   return(features_df)
-
 }
 
 #' Calculate probability of remission as percentage of remission cases with
@@ -253,7 +257,7 @@ compute_features <- function(
 #' @param direction character vector containing "<", ">". "<" indicates that a 
 #' larger feature value indicates a higher probability of remission.
 #' @param samples numeric indicating no. of samples to augment. Defaults to NA.
-calc_p_remission_x_v2 <- function(
+calc_p_remission_x <- function(
   X_train, X_predict, metadata_pid, direction, samples, include_tp2
 ) {
   #' Helper function that calculates probability of remission as the number of
@@ -280,7 +284,7 @@ calc_p_remission_x_v2 <- function(
     metadata_pid[rownames(X_train), "label"] == 0, , drop = F
   ]
   n <- nrow(X_remission)
-  print(sprintf("No. of remission samples in training set = %d", n))
+  cat(sprintf("No. of remission samples in training set = %d\n", n))
   
   # Augment data by simulating samples 
   if (!is.null(samples)) {
@@ -333,8 +337,9 @@ calc_p_remission_x_v2 <- function(
 #' Used to predict relapse for all subtypes
 #' X df containing all subtypes of patients in arg: pid and normal patients
 #' @param pid vector of pid belonging to both D0 and D8 patients (identically ordered)
+#' @param sid_train_test list of length 2 in the form of (sid_train, sid_test)
 #' @return list containing prediction plot and vector coordinates
-predict_pipeline_v2 <- function(
+predict_pipeline <- function(
   X_subtype,
   X_normal,
   metadata_sid,
@@ -342,26 +347,43 @@ predict_pipeline_v2 <- function(
   batch_genes = NULL,
   class_genes = NULL,
   samples = NULL,
-  include_tp2 = FALSE
+  include_tp2 = FALSE,
+  sid_train_test = NULL
 ) {
+  if (!is.null(sid_train_test)) {
+    stopifnot(length(sid_train_test) == 2)
+    sid_train <- intersect(sid_train_test[[1]], colnames(X_subtype))
+    sid_test <- intersect(sid_train_test[[2]], colnames(X_subtype))
+    # assert that D0 and D8 samples match
+    stopifnot(is_paired(sid_train)) 
+    stopifnot(is_paired(sid_test))
+  }
   sid_remission <- colnames(X_subtype)[
     metadata_sid[colnames(X_subtype), "label"] == 0
   ]
-  
-  if (is.null(class_genes))  
-    class_genes <- getLocalGenes(X_subtype, sid_remission)
+ 
+  # Feature selection 
+  if (is.null(class_genes)) { 
+    # Identify DE features between D0 and D8 samples
+    if (!is.null(sid_train_test)) {
+      class_genes <- identify_DE(
+        X_subtype[, sid_train, drop = FALSE],
+        sid_remission
+      )
+    } else {
+      class_genes <- identify_DE(X_subtype, sid_remission)
+    }
     # # Save drug response genes
     # subtype <- unique(metadata_sid[colnames(X_subtype), "subtype"])
     # writeLines(class_genes, sprintf("tmp/response-%s.txt", subtype))
-
+  }
   if (is.null(batch_genes)) {
     selected_genes <- class_genes
   } else {
     selected_genes <- setdiff(class_genes, batch_genes)
   }
-  
-  cat(sprintf("No. of features selected = %d\n", length(class_genes)))
-  cat(sprintf("No. of final genes = %d\n", length(selected_genes)))
+  cat(sprintf("No. of DE features = %d\n", length(class_genes)))
+  cat(sprintf("No. of final features = %d\n", length(selected_genes)))
   
   # Subtype and normal samples
   response <- t(X_subtype[selected_genes, ])
@@ -379,21 +401,49 @@ predict_pipeline_v2 <- function(
       "log_mrd_d33", "log_mrd_tp2" 
     )
     direction <- c("<", "<", ">", ">", ">")  
-    X_train <- V[!is.na(V$log_mrd_tp2), features]
+    V <- na.omit(V[features])
   } else {
     # Select features and specify order
     features <- c(
       "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal", "log_mrd_d33" 
     )
     direction <- c("<", "<", ">", ">")  
-    X_train <- V[features] 
+  } 
+  V <- na.omit(V[features])
+  stopifnot(!any(is.na(V))) # assert no NA values 
+
+  # If sid_train_test is supplied, returns predictions for both train and test
+  if (!is.null(sid_train_test)) {
+    X_train <- V[unique(substring(sid_train, 1, 4)), , drop = F]
+    X_test <- V[unique(substring(sid_test, 1, 4)), , drop = F]
+    prediction_train <- calc_p_remission_x(
+      X_train, X_train, metadata_pid, direction, samples, include_tp2
+    )
+    prediction_test <- calc_p_remission_x(
+      X_train, X_test, metadata_pid, direction, samples, include_tp2
+    )
+    train_results <- list(
+      p_remission_xi = prediction_train$p_remission_xi,
+      X_y = cbind(X_train, prediction_train$p)
+    )
+    test_results <- list(
+      p_remission_xi = prediction_test$p_remission_xi,
+      X_y = cbind(X_test, prediction_test$p)
+    )
+
+    cat("Prediction complete!\n\n")
+    return(list(train = train_results, test = test_results))
+  } else { 
+    prediction <- calc_p_remission_x(
+      V, V, metadata_pid, direction, samples, include_tp2
+    )
+    # Concatenate features and probabilities
+    X_y <- cbind(V, prediction$p)
+
+    cat("Prediction complete!\n\n")
+    return(list(
+      p_remission_xi = prediction$p_remission_xi,
+      X_y = X_y
+    ))
   }
-  
-  prediction <- calc_p_remission_x_v2(
-    X_train, X_train, metadata_pid, direction, samples, include_tp2
-  )
-  # Concatenate features and probabilities
-  X_y <- cbind(X_train, prediction$p)
-  
-  list(p_remission_xi = prediction$p_remission_xi, X_y = X_y)
 }
