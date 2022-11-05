@@ -1,4 +1,4 @@
-# Log2 transforms data and handles -Inf values
+ # Log2 transforms data and handles -Inf values
 log2_transform <- function(df) {
   log2_df <- log2(df)
   logical_df <- is.infinite(data.matrix(log2_df))
@@ -193,3 +193,42 @@ calc_logfc <- function(df1, df2, func = mean, logged = T) {
     return(log2(fc))
   }
 }
+
+
+#' Naive row-wise two-sample t-test for every probe
+#' Does a t-test between every row of matrices a and b
+#' Arguments: Dataframe with both clases, size of class A, ...
+#' @param paired logical indicating whether X contains paired data or not
+calc_univariate <- function(
+  FUN, X, Y = NULL, n_split = NULL,
+  paired = FALSE, flag = "p.value"
+) {
+  if (paired) {
+    # Y and n can be both NULL    
+    n_split <- ncol(X) / 2
+  }
+  
+  if (!is.null(Y)){
+    if (!is.data.frame(X) | !is.data.frame(Y))
+      stop("Type error: Both X and Y have to be of class data.frame.")
+    X1 <- data.frame(t(X))
+    Y1 <- data.frame(t(Y))
+    list_htest <- mapply(FUN, X1, Y1, paired = paired, SIMPLIFY = F)
+  } else if(!is.null(n_split)) {
+    list_htest <- apply(X, 1, function(x) {
+      idx <- seq(1, n_split)
+      FUN(x[idx], x[-idx], paired = paired)
+    })
+  } else {
+    stop("If paired is FALSE either Y or n_split must be provided.")   
+  }
+  
+  if (flag == "p.value") {
+    return(sapply(list_htest, function(obj) obj$p.value))
+  } else if (flag == "statistic") {
+    return(sapply(list_htest, function(obj) obj$statistic))
+  } else {
+    return(list_htest)
+  }
+}
+

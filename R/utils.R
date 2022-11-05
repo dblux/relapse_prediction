@@ -10,7 +10,7 @@
 #'   does not contain ambiguous and affymetrix probesets.
 #' @param file name of the annotation file
 #' @param ret.annot logical indicating whether to return vector of annotations
-affy2id <- function(X, file, ret.annot = F) { 
+affy2id <- function(X, file, return_annot = F) { 
   # probesets are rownames of dataframe
   annot_table <- read.table(
     file, sep = "\t", header = T, row.names = 1,
@@ -58,12 +58,12 @@ affy2id <- function(X, file, ret.annot = F) {
   # Assigning id to X
   rownames(X_genes) <- fltr_rownames
   
-  if (ret.annot) {
+  if (return_annot) {
     orig_rownames[idx_del] <- NA
     names(orig_rownames) <- rownames(X)
-    return(orig_rownames)
+    return(list(X = X_genes, mapping = orig_rownames))
   }
-  
+
   X_genes
 }
 
@@ -72,8 +72,14 @@ affy2id <- function(X, file, ret.annot = F) {
 sort_sid <- function(x) {
   pid <- sapply(x, substring, 1, 4)
   time <- sapply(x, substring, 6, 7)
-  time_pid <- mapply(paste0, time, pid)
+  time_pid <- mapply(paste0, time, pid) # 'D0P023'
   return(x[order(time_pid)])
+}
+
+
+#' Generates sample IDs from patient IDs
+get_sid <- function(pid) {
+  c(paste0(pid, '_D0'), paste0(pid, '_D8'))
 }
 
 

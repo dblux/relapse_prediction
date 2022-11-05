@@ -1,3 +1,8 @@
+## TO-DO
+
+- [] Clean up evaluation-figures.ipynb
+- [] Clean up sandbox.ipynb
+
 ## Scripts
 1. [Python script](bin/calcGeneLength.py) for calculating mean, median and max gene lengths from reference genome GTF file. Saves output file as gene_lengths.tsv by default
 

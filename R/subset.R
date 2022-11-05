@@ -29,9 +29,9 @@ remove_rows <- function(X, condition) {
 }
 
 
-#' Select top n highly variable genes
+#' Select top n highly variable features
 #' @param X matrix or dataframe with rownames
-select_hvg <- function(X, n, ret.genes = FALSE) {
+select_hvg <- function(X, n, return.features = FALSE) {
   if (is.null(rownames(X)))
     stop("X does not have rownames")
   
@@ -39,10 +39,23 @@ select_hvg <- function(X, n, ret.genes = FALSE) {
   sorted_var <- sort(row_var, decreasing = TRUE)
   hvg <- names(sorted_var)[1:n]
   
-  if (ret.genes)
+  if (return.features)
     return(hvg)
   
   X[hvg, ]
+}
+
+
+#' Select top n highest expressed features
+select_highexpr <- function(X, n, return.features = FALSE) {
+  stopifnot(!is.na(sum(X))) # assert no NA values
+  feat_expr <- rowMeans(X)
+  idx_ranked <- order(feat_expr, decreasing = TRUE)
+
+  if (return.features)
+    return(rownames(X)[idx_ranked[seq_len(n)]])
+
+  X[idx_ranked[seq_len(n)], , drop = FALSE]
 }
 
 
@@ -90,4 +103,50 @@ removeProbesets <- function(df) {
   print(paste0("No. of ambiguous and AFFY probesets removed: ",
                nrow(df) - sum(logical_vec)))
   return(df[logical_vec, , drop=F])
+}
+
+
+#' Find similar genes to vector of gene symbols
+#' @return named list with gene symbols in x as names and
+#' matching gene symbols in y as values
+get_similar_genes <- function(x, y) {
+  # Default value of gene with no match is NULL
+  matched_genes <- vector("list", length(x))
+  names(matched_genes) <- x
+  
+  idx_notequiv <- !(x %in% y)
+  not_equiv <- x[idx_notequiv]
+  idx_mult <- grepl("///", not_equiv)
+  
+  matched_singles <- lapply(
+    not_equiv[!idx_mult],
+    grep, x = y, value = T
+  )
+  names(matched_singles) <- not_equiv[!idx_mult]
+  matched_singles_fltr <- Filter(
+    function(x) ifelse(length(x) == 0, F, T),
+    matched_singles
+  )
+
+  mult_symbols <- lapply(
+    not_equiv[idx_mult],
+    function(x) unlist(strsplit(x, " /// "))
+  )
+  names(mult_symbols) <- not_equiv[idx_mult]
+  matched_mults <- lapply(
+    mult_symbols,
+    function(x) unlist(lapply(x, grep, x = y, value = T))
+  )
+  matched_mults_fltr <- Filter(
+    function(x) ifelse(length(x) == 0, F, T),
+    matched_mults
+  )
+  
+  # initialise list with equivalent genes
+  matched_genes[!idx_notequiv] <- x[!idx_notequiv]
+  # replace similar singles and multiples
+  matched_genes[names(matched_singles_fltr)] <- matched_singles_fltr
+  matched_genes[names(matched_mults_fltr)] <- matched_mults_fltr
+
+  matched_genes
 }

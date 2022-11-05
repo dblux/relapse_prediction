@@ -10,11 +10,11 @@ identify_batch_features <- function(
     test_anova <- function(x, batch, method) {
       X <- data.frame(gene = x, batch = as.factor(batch))
       
-      if (method == "welch") {
+      if (method == 'welch') {
         return(oneway.test(gene ~ batch, X)$p.value)
-      } else if (method == "aov") {
+      } else if (method == 'aov') {
         return(unname(unlist(summary(aov(gene ~ batch, X)))[9]))
-      } else if (method == "kruskal") {
+      } else if (method == 'kruskal') {
         return(kruskal.test(gene ~ batch, X)$p.value)
       }
     }
@@ -25,18 +25,18 @@ identify_batch_features <- function(
   method <- match.arg(method)
   # Subsetting D0 TEL-AML1 remission samples
   annot <- annot[colnames(X), ] # Rearrange annot
-  sid_d0 <- rownames(annot)[annot$class_info == "D0"]
-  sid_telaml1 <- rownames(annot)[annot$subtype == "TEL-AML1"]
-  sid_remission <- rownames(annot)[annot$label == 0]
+  sid_d0 <- rownames(annot)[annot$class_info == 'D0']
+  sid_telaml1 <- rownames(annot)[annot$subtype == 'TEL-AML1']
+  sid_remission <- rownames(annot)[annot$label == 'Remission']
   sid <- Reduce(intersect, list(sid_d0, sid_telaml1, sid_remission))
   d0_telaml1 <- X[, sid]
   d0_telaml1 <- remove_rows(d0_telaml1, var(row) == 0)
   
-  batch <- annot[sid, "batch_info"]
+  batch <- annot[sid, 'batch_info']
   pvalues <- test_row_anova(d0_telaml1, batch, method)
   
   n_nan <- sum(sapply(pvalues, is.na))
-  print(sprintf("No. of NaNs = %d", n_nan))
+  print(sprintf('No. of NaNs = %d', n_nan))
   
   # Thresholding by p-value
   names(pvalues)[pvalues < alpha & !is.na(pvalues)]
@@ -51,7 +51,6 @@ identify_DE <- function(
 ) {
   if (!is_paired(X_subtype))
     stop("Patient IDs are not paired..")
-  
   sid_idx <- intersect(sid_remission, colnames(X_subtype))
   X_subtype_remission <- X_subtype[, sid_idx, drop = F]
   n_pairs <- ncol(X_subtype_remission) / 2
@@ -102,20 +101,20 @@ identify_DE <- function(
 }
 
 
- #' @param response_df dataframe with samples x features
+#' @param response_df dataframe with samples x features
 #' @param normal_df dataframe with samples x features
 # D0 centroid used to define D0-Normal vector
 compute_features <- function(
   response_df, normal_df,
   sid_train, sid_remission
 ) {
+  if (!is_paired(t(response_df)))
+    stop("Patient IDs are not paired..")
+  
   # Split response df into D0 and D8 df
   n <- nrow(response_df)/2
   d0_df <- response_df[1:n, , drop = F]
   d8_df <- response_df[-(1:n), , drop = F]
-  
-  if (!is_paired(t(response_df)))
-    stop("Patient IDs are not paired..")
   
   # Calculate centroids
   # Only use remission patients in training set to calculate centroid
@@ -160,6 +159,7 @@ compute_features <- function(
   ## Projection of D0-D8 on D0-N
   erm2 <- colSums(t(d0_d8_hstack) * unit_d0_normal_vstack)
   erm2_ratio <- erm2/l2norm_d0_normal
+  erm2_ratio2 <- erm2 / (l2norm_d0_normal - erm2)
   
   stopifnot(identical(names(erm2), names(erm2_ratio)))
   
@@ -217,6 +217,33 @@ compute_features <- function(
                          function(x, y) calcAngleVectors(x, y),
                          leuk_normal)
   
+  L_D0 <- d0_df - leuk_centroid
+  L_D8 <- d8_df - leuk_centroid
+  
+  # Angle between LD0 and LD8
+  angle_LD0_LD8 <- mapply(
+    calcAngleVectors,
+    data.frame(t(L_D0)),
+    data.frame(t(L_D8))
+  ) 
+
+  # Angle between LD0 and LN
+  angle_LD0_LN <- mapply(
+    calcAngleVectors,
+    data.frame(t(L_D0)),
+    data.frame(matrix(leuk_normal))
+  ) 
+
+  # Angle between LD8 and LN
+  angle_LD8_LN <- mapply(
+    calcAngleVectors,
+    data.frame(t(L_D8)),
+    data.frame(matrix(leuk_normal))
+  )
+
+  angle_LD0_LD8_ratio1 <- angle_LD0_LD8 / angle_LD0_LN
+  angle_LD0_LD8_ratio2 <- angle_LD0_LD8 / angle_LD8_LN
+
   ### L2-norm between D8 and Normal ###
   l2norm_d8_normal <- apply(d8_normal_vstack, 2, calcL2Norm)
   
@@ -231,20 +258,23 @@ compute_features <- function(
   erm1_ratio3 <- erm1/l2norm_d0_d8
   
   ### Concatenate all features ###
-  features_df <- data.frame(
-    erm1, erm1_ratio1, erm2, erm2_ratio, erm3, erm3_ratio,
-    d0_normal_proj, d8_normal_proj, l2norm_d0_d8,
-    diff_l2norm, angle_d0_d8, angle_nd0_nd8, angle_nl_nd8,
+  features <- data.frame(
+    erm1, erm1_ratio1, erm1_ratio2, erm1_ratio3,
+    erm2, erm2_ratio, erm2_ratio2,
+    erm3, erm3_ratio,
+    d0_normal_proj, d8_normal_proj, l2norm_d0_d8, diff_l2norm,
+    angle_d0_d8, angle_nd0_nd8, angle_nl_nd8,
     angle_d0d8_normal, angle_d0d8_d0normal,
     angle_d0_normal, angle_d8_normal,
+    angle_LD0_LD8, angle_LD0_LN, angle_LD8_LN,
+    angle_LD0_LD8_ratio1, angle_LD0_LD8_ratio2, 
     l2norm_d0_normal, l2norm_d8_normal,
     l2norm_ratio1, l2norm_ratio2,
-    l2norm_diff, l2norm_diff_ratio,
-    erm1_ratio2, erm1_ratio3
+    l2norm_diff, l2norm_diff_ratio
   )
+  rownames(features) <- substring(rownames(features), 1, 4)
   
-  rownames(features_df) <- substring(rownames(features_df), 1, 4)
-  return(features_df)
+  features
 }
 
 #' Calculate probability of remission as percentage of remission cases with
@@ -281,7 +311,7 @@ calc_p_remission_x <- function(
     stop("Missing values present in either the training or test set.")
   
   X_remission <- X_train[
-    metadata_pid[rownames(X_train), "label"] == 0, , drop = F
+    metadata_pid[rownames(X_train), "label"] == 'Remission', , drop = F
   ]
   n <- nrow(X_remission)
   cat(sprintf("No. of remission samples in training set = %d\n", n))
@@ -348,7 +378,13 @@ predict_pipeline <- function(
   class_genes = NULL,
   samples = NULL,
   include_tp2 = FALSE,
-  sid_train_test = NULL
+  sid_train_test = NULL,
+  return_features = FALSE,
+  features = c(
+    "erm1_ratio2", "l2norm_ratio2",
+    "angle_LD0_LD8_ratio2", "log_mrd_d33"
+  ),
+  direction = c("<", "<", "<", ">")
 ) {
   if (!is.null(sid_train_test)) {
     stopifnot(length(sid_train_test) == 2)
@@ -359,9 +395,8 @@ predict_pipeline <- function(
     stopifnot(is_paired(sid_test))
   }
   sid_remission <- colnames(X_subtype)[
-    metadata_sid[colnames(X_subtype), "label"] == 0
+    metadata_sid[colnames(X_subtype), "label"] == 'Remission' 
   ]
- 
   # Feature selection 
   if (is.null(class_genes)) { 
     # Identify DE features between D0 and D8 samples
@@ -377,6 +412,7 @@ predict_pipeline <- function(
     # subtype <- unique(metadata_sid[colnames(X_subtype), "subtype"])
     # writeLines(class_genes, sprintf("tmp/response-%s.txt", subtype))
   }
+  
   if (is.null(batch_genes)) {
     selected_genes <- class_genes
   } else {
@@ -386,36 +422,48 @@ predict_pipeline <- function(
   cat(sprintf("No. of final features = %d\n", length(selected_genes)))
   
   # Subtype and normal samples
-  response <- t(X_subtype[selected_genes, ])
-  normal <- t(X_normal[selected_genes, ])
+  if (is.null(sid_train_test)) {
+    response <- t(X_subtype[selected_genes, ])
+    normal <- t(X_normal[selected_genes, ])
+    V <- compute_features(response, normal, colnames(X_subtype), sid_remission)
+  } else {
+    sid <- sort_sid(c(sid_train, sid_test))
+    response <- t(X_subtype[selected_genes, sid])
+    normal <- t(X_normal[selected_genes, ])
+    V <- compute_features(response, normal, sid_train, sid_remission)
+  }
   
-  # Collate MRD results as well
-  V <- compute_features(response, normal, colnames(X_subtype), sid_remission)
+  # Collate MRD results
   V$log_mrd_d33 <- log10(metadata_pid[rownames(V), "d33_mrd"])
-  
   if (include_tp2) {
     # Include MRD TP2
     V$log_mrd_tp2 <- log10(metadata_pid[rownames(V), "wk12_mrd"]) 
-    features <- c(
-      "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
-      "log_mrd_d33", "log_mrd_tp2" 
+    features <- c(features, "log_mrd_tp2")
+    direction <- c(direction, ">")  
+  }
+  
+  V_sub <- V[features] # select features and specify order
+  V_sub <- na.omit(V_sub) # Removes patients that have NA MRD values
+  pid_omitted <- setdiff(rownames(V), rownames(V_sub))
+  if (length(pid_omitted) > 0) {
+    sid_omitted <- c(
+      paste0(pid_omitted, '_D0'),
+      paste0(pid_omitted, '_D8')
     )
-    direction <- c("<", "<", ">", ">", ">")  
-    V <- na.omit(V[features])
-  } else {
-    # Select features and specify order
-    features <- c(
-      "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal", "log_mrd_d33" 
-    )
-    direction <- c("<", "<", ">", ">")  
-  } 
-  V <- na.omit(V[features])
-  stopifnot(!any(is.na(V))) # assert no NA values 
+    sid_train <- setdiff(sid_train, sid_omitted)
+    sid_test <- setdiff(sid_test, sid_omitted)
+    cat(sprintf("Omitted patients: %s!\n", pid_omitted))
+  }
+  stopifnot(!any(is.na(V_sub))) # assert no NA values 
+  
+  if (return_features) {
+    return(na.omit(V))
+  }
 
   # If sid_train_test is supplied, returns predictions for both train and test
   if (!is.null(sid_train_test)) {
-    X_train <- V[unique(substring(sid_train, 1, 4)), , drop = F]
-    X_test <- V[unique(substring(sid_test, 1, 4)), , drop = F]
+    X_train <- V_sub[unique(substring(sid_train, 1, 4)), , drop = F]
+    X_test <- V_sub[unique(substring(sid_test, 1, 4)), , drop = F]
     prediction_train <- calc_p_remission_x(
       X_train, X_train, metadata_pid, direction, samples, include_tp2
     )
@@ -435,10 +483,10 @@ predict_pipeline <- function(
     return(list(train = train_results, test = test_results))
   } else { 
     prediction <- calc_p_remission_x(
-      V, V, metadata_pid, direction, samples, include_tp2
+      V_sub, V_sub, metadata_pid, direction, samples, include_tp2
     )
     # Concatenate features and probabilities
-    X_y <- cbind(V, prediction$p)
+    X_y <- cbind(V_sub, prediction$p)
 
     cat("Prediction complete!\n\n")
     return(list(

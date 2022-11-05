@@ -1,17 +1,82 @@
 #' Plots PCA plot using ggplot2
 #'
 #' @import ggplot2
+#' @importFrom tibble rownames_to_column
 #' @param X dataframe with features as rows and samples as columns
-#' @param annot dataframe of annotation with samples as rows
+#' @param metadata dataframe of metadata with samples as rows
 #' @param newdata dataframe of data to be predicted by prcomp object
-#' @param ... optional arguments are passed to aes_string in ggplot
-ggplot_pca <- function(X, annot, cex = 2, newdata = NULL, ...) {
+#' @param x character indicating PC to plot on x-axis
+#' @param y character indicating PC to plot on y-axis
+#' @param ... optional arguments are passed to aes_string in ggplot. Optional
+#' parameters have to match column names in metadata
+ggplot_pca <- function(
+  X, metadata,
+  cex = 2,
+  label = FALSE,
+  newdata = NULL,
+  x = "PC1", y = "PC2",
+  show.legend = TRUE,
+  ...
+) {
+  x_idx <- as.numeric(substring(x, 3))
+  y_idx <- as.numeric(substring(y, 3))
+  
+  # PCA
+  pca_obj <- prcomp(t(X), scale = TRUE)
+  Z <- data.frame(pca_obj$x)
+  eigenvalues <- (pca_obj$sdev)^2
+  var_pc <- eigenvalues/sum(eigenvalues)
+  pc_labels <- sprintf("%s (%.2f%%)", colnames(Z), var_pc * 100)
+
+  # Projects newdata into PCA space
+  if (!is.null(newdata)) {
+    Z_new <- predict(pca_obj, newdata = t(newdata))
+    # Remove duplicate rows
+    Z_new <- Z_new[!(rownames(Z_new) %in% rownames(Z)), ]
+    Z <- rbind(Z, Z_new)
+  }
+  
+  # Concat with metadata
+  metadata_cols <- unlist(list(...))
+  metadata1 <- metadata[rownames(Z), metadata_cols, drop = F]
+  Z_metadata <- cbind(rownames_to_column(Z), metadata1)
+  Z_metadata$rowname <- substring(Z_metadata$rowname, 1, 4)
+      
+  ax <- ggplot(
+    Z_metadata,
+    aes_string(x = x, y = y, label = "rowname", ...),
+  ) +
+    labs(x = pc_labels[x_idx], y = pc_labels[y_idx]) +
+    geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
+    geom_hline(yintercept = 0, color = "black", alpha = 0.5)
+  
+  # Plot text labels instead of points
+  if (label)
+    return(
+      ax +
+        geom_point(color = "black", cex = cex, alpha = .2) +
+        geom_text(cex = cex)
+    )
+
+  ax + geom_point(cex = cex, alpha = .7, show.legend = show.legend)
+}
+
+
+#' Plots top PCs using ggplot
+#'
+#' @import ggplot2
+#' @importFrom tidyr gather
+#' @export
+ggplot_top_pc <- function(
+  X, metadata, x_axis, n = 8, cex = 2, newdata = NULL, ...
+) {
   # PCA
   pca_obj <- prcomp(t(X))
-  Z <- data.frame(pca_obj$x[, 1:3])
+  Z <- data.frame(pca_obj$x[, 1:n])
   eigenvalues <- (pca_obj$sdev)^2
-  var_pc <- eigenvalues[1:3]/sum(eigenvalues)
-  pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
+  var_pc <- eigenvalues[1:n]/sum(eigenvalues)
+  pc_labels <- sprintf("PC%d (%.2f%%)", 1:n, var_pc*100)
+  names(pc_labels) <- paste0('PC', seq_len(length(pc_labels)))
 
   # Projects newdata into PCA space
   if (!is.null(newdata)) {
@@ -21,72 +86,135 @@ ggplot_pca <- function(X, annot, cex = 2, newdata = NULL, ...) {
     Z <- rbind(Z, Z_new)
   }
 
-  # concat with annotations
-  annot_cols <- unlist(list(...))
-  annot1 <- annot[rownames(Z), annot_cols, drop = F]
-  Z_annot <- cbind(Z, annot1)
-
-  ggplot(Z_annot, aes_string(x = "PC1", y = "PC2", ...)) +
-    geom_point(cex = cex) +
-    labs(x = pc_labels[1], y = pc_labels[2]) +
-    geom_vline(xintercept = 0, color = "black", alpha = 0.5) +
-    geom_hline(yintercept = 0, color = "black", alpha = 0.5)
+  # Concat with metadata
+  plot_factors <- unlist(list(...))
+  plot_factors <- unique(c(x_axis, plot_factors))
+  metadata1 <- metadata[rownames(Z), plot_factors, drop = F]
+  Z_metadata <- cbind(Z, metadata1)
+  
+  # Convert data to long format
+  Z_long <- gather(Z_metadata, key = "PC", value = "value", -plot_factors)
+  
+  ggplot(Z_long, aes_string(x = x_axis, y = "value", ...)) +
+    facet_wrap(
+      ~PC, scales = 'free_y', nrow = 2,
+      labeller = as_labeller(pc_labels),
+    ) +
+    geom_point(
+      position = position_jitterdodge(jitter.width = 1),
+      cex = cex, alpha = 0.8
+    ) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank()
+    )
 }
 
 
 #' Plots UMAP plot using ggplot2
 #'
 #' @import ggplot2
+#' @importFrom umap umap
 #' @param obj UMAP object from umap function
 #' @param ... optional arguments are passed to aes_string in ggplot
-ggplot_umap <- function(obj, annot, cex = 2, alpha = 1, ...) {
+ggplot_umap <- function(
+  X, metadata,
+  cex = 2,
+  plot_label = FALSE,
+  return_data = FALSE, ...
+) {
+  obj <- umap(t(X))
   Z <- data.frame(obj$layout)
   colnames(Z) <- c("UMAP1", "UMAP2")
-  annot_cols <- unlist(list(...))
-  annot1 <- annot[rownames(Z), annot_cols, drop = F]
-  Z_annot <- cbind(Z, annot1)
   
-  ggplot(Z_annot, aes_string(x = "UMAP1", y = "UMAP2" , ...)) +
+  metadata_cols <- unlist(list(...))
+  metadata1 <- metadata[colnames(X), metadata_cols, drop = F]
+  Z_metadata <- cbind(rownames_to_column(Z), metadata1)
+  Z_metadata$rowname <- substring(Z_metadata$rowname, 1, 4)
+  
+  ax <- ggplot(
+    Z_metadata,
+    aes_string(x = 'UMAP1', y = 'UMAP2', label = "rowname", ...)
+  ) 
+  
+  # Plot text labels instead of points
+  if (plot_label) {
+    ax <- ax +
+      geom_point(color = "black", cex = cex, alpha = .2) +
+      geom_text(cex = cex)
+  } else {
+    ax <- ax + geom_point(cex = cex)
+  }
+
+  if (return_data)
+    return(list(plot = ax, X = Z_metadata))
+
+  ax
+}
+
+
+#' Plots t-SNE plot using ggplot2
+#'
+#' @import ggplot2
+#' @import Rtsne
+#' @param obj UMAP object from umap function
+#' @param ... optional arguments are passed to aes_string in ggplot
+ggplot_tsne <- function(X, metadata, cex = 2, alpha = 1, ...) {
+  obj <- Rtsne(normalize_input(t(X)))
+  Z <- data.frame(obj$Y)
+  colnames(Z) <- c("tSNE1", "tSNE2")
+  metadata_cols <- unlist(list(...))
+  metadata1 <- metadata[colnames(X), metadata_cols, drop = F]
+  Z_metadata <- cbind(Z, metadata1)
+  
+  ggplot(Z_metadata, aes_string(x = "tSNE1", y = "tSNE2" , ...)) +
     geom_point(cex = cex, alpha = alpha)
 }
 
 
-#' Plots ROC curve using ggplot2
-#' @import ggplot2
+#' Plots ROC curve
+#'
+#' @import ggplot2 pROC
+#'
 #' @param X dataframe containing scores / predictions and labels
 #' @param response character containing name of column in X with labels
 #' @param predictor character containing name of column/s in X of predictors
+#' @param direction character belonging to c("auto", "<", ">"). control (0) < case (1)
+#' no character vectors allowed to specific multiple different directions!
 #' @param pauc.limits numeric vector of length 2 indicating limits
+#' @param show.names logical indicating whether to include names in AUC legend
+#' @param plot.names character containing names of each plot in same order as predictor.
+#' Default NULL, predictor used for names
 ggplot_roc <- function(
   X, response, predictor,
+  direction = "auto",
   pauc.limits = FALSE,
   pauc.axis = c("specificity", "sensitivity"),
   pauc.correct = TRUE,
+  plot.names = NULL,
+  show.names = TRUE,
   return.auc = FALSE,
   lwd = 1
 ) {
+  pauc.axis = match.arg(pauc.axis)
+  
+  auc_caption <- "AUC"
   if (!is.logical(pauc.limits)) {
+    # If pAUC limits are provided
     pauc.limits <- sort(pauc.limits, decreasing = TRUE)
+    auc_caption <- "pAUC"
   }
   
   if (length(predictor) == 1) {
-    str_formula <- paste(response, predictor, sep = " ~ ")
-  } else if (length(predictor) > 1) {
-    predictors <- do.call(paste, c(as.list(predictor), sep = " + "))
-    str_formula <- paste(response, predictors, sep = " ~ ")
-  } else {
-    stop("arg predictor is of non-positive length.")
-  }
-  
-  roc_objs <- roc(
-    as.formula(str_formula),
-    data = X,
-    partial.auc = pauc.limits,
-    partial.auc.focus = match.arg(pauc.axis),
-    partial.auc.correct = pauc.correct
-  )
-
-  if (is(roc_objs, "roc")) {
+    # Single ROC curve
+    roc_objs <- roc(
+      X[[response]],
+      X[[predictor]],
+      direction = direction,
+      partial.auc = pauc.limits,
+      partial.auc.focus = pauc.axis,
+      partial.auc.correct = pauc.correct
+    )
     aucs <- roc_objs$auc
     d <- data.frame(
       FPR = 1 - roc_objs$specificities,
@@ -94,7 +222,27 @@ ggplot_roc <- function(
     )
     d <- d[nrow(d):1, ]
     d <- cbind(names = predictor, d)
-  } else {
+  } else if (length(predictor) > 1) {
+    # To ensure that direction can be subsetted
+    if (length(direction) == 1) {
+      direction <- rep(direction, length(predictor))
+    } else if (length(predictor) != length(direction)) {
+      stop("Length of direction not equals to that of predictor!")
+    }
+    
+    roc_objs <- lapply(
+      seq_along(predictor),
+      function(i) {
+        roc(
+          X[[response]],
+          X[[predictor[i]]],
+          direction = direction[i],
+          partial.auc = pauc.limits,
+          partial.auc.focus = pauc.axis,
+          partial.auc.correct = pauc.correct
+        )
+      }
+    )
     aucs <- sapply(roc_objs, function(obj) obj$auc)
     list_d <- lapply(
       roc_objs,
@@ -108,20 +256,50 @@ ggplot_roc <- function(
     n_rows <- sapply(list_d, nrow)
     predictors_col <- rep(predictor, n_rows)
     d <- cbind(names = predictors_col, d)
+  } else {
+    stop("arg predictor is of non-positive length.")
   }
-            
-  # label colors are assigned by alphabetical order
-  labels <- sort(sprintf("%s (%.3f)", predictor, aucs))
-                     
+        
+  ## Plot labels
+  if (show.names) {
+    if (!is.null(plot.names)) {
+      if (length(plot.names) != length(predictor))
+        stop("length of plot names does not match number of predictors!")
+      
+      # plot.names in same order as predictor
+      labels <- sprintf("%s (%s: %.3f)", plot.names, auc_caption, aucs)
+      labels[is.na(aucs)] <- plot.names[is.na(aucs)]
+    } else {
+      labels <- sprintf("%s (%s: %.3f)", predictor, auc_caption, aucs)
+      labels[is.na(aucs)] <- predictor[is.na(aucs)]
+    }
+  } else {
+    labels <- sprintf("%s = %.3f", auc_caption, aucs)
+    labels[is.na(aucs)] <- "pAUC = NA"
+  }
+  # Order according to lexical order of predictor
+  labels <- labels[order(predictor)]
+
   ax_roc <- ggplot() +
-    geom_segment(aes(x = 0, y = 0, xend = 1, yend = 1),
-                 inherit.aes = FALSE,
-                 lty = "dashed", lwd = lwd,
-                 colour = "black", alpha = .4) +
-    geom_step(data = d,  # to avoid mutiple plotting of geom_segment
-              aes(x = FPR, y = TPR, col = names, lty = names),
-              direction = "hv", lwd = lwd) +
-    scale_color_discrete(name = element_blank(), label = labels) +
+    geom_segment(
+      aes(x = 0, y = 0, xend = 1, yend = 1),
+      inherit.aes = FALSE,
+      lty = "dotted", lwd = lwd,
+      colour = "black", alpha = .4
+    ) +
+    geom_line(
+      data = d,  # to avoid mutiple plotting of geom_segment
+      aes(x = FPR, y = TPR, col = names),  # OPTION lty = names
+      direction = "hv", lwd = lwd
+    ) +
+    scale_color_discrete(
+      name = element_blank(),
+      label = labels
+    ) +
+#     scale_linetype_discrete(
+#       name = element_blank(),
+#       label = labels
+#     ) +
     theme_bw() +
     labs(x = "FPR", y = "TPR") +
     theme(
@@ -144,8 +322,9 @@ ggplot_roc <- function(
     ax_roc <- ax_roc +
 #       coord_cartesian(xlim = fpr_limits) +
       geom_rect(
-        d_rect, mapping = aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
-        fill = "blue", color = "black", alpha = 0.3
+        data = d_rect,
+        aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+        fill = "blue", alpha = 0.2
       )
   } else if (pauc.axis == "sensitivity") {
     d_rect <- data.frame(
@@ -157,7 +336,7 @@ ggplot_roc <- function(
       geom_rect(
         data = d_rect,
         aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
-        fill = "blue", color = "black", alpha = 0.3
+        fill = "blue", alpha = 0.2
       )
   }
   
@@ -225,7 +404,7 @@ plot_vectors <- function(
 ) {
   # PCA
   if (pca) {
-    pca_obj <- prcomp(t(X), scale = T)
+    pca_obj <- prcomp(t(X), scale = TRUE)
     pca_df <- data.frame(pca_obj$x[,1:2])
     n <- nrow(pca_df)
     d0_pca <- pca_df[1:((n-3) / 2),]
@@ -238,9 +417,8 @@ plot_vectors <- function(
     norm_pca <- pca_df[(n-2):n,]
     
     # Obtaining batch and class annotations
-    label <- as.numeric(metadata_df[rownames(d0_pca), "label"]) + 1
+    label <- as.factor(metadata_df[rownames(d0_pca), "label"])
     batch <- as.factor(metadata_df[rownames(d0_pca), "batch_info"])
-    print(label)
     
     # Axis labels
     eigenvalues <- (pca_obj$sdev)^2
@@ -252,18 +430,27 @@ plot_vectors <- function(
   }
   
   scatter_pca <- ggplot(data = subtype_pca) +
-    geom_point(aes(x = start_x, y = start_y, colour = batch), shape = 15,
-               size = cex, show.legend = T) +
-    geom_point(aes(x = end_x, y = end_y, colour = batch), shape = 16,
-               size = cex, show.legend = F) +
-    geom_segment(aes(x = start_x, y = start_y, xend = end_x, yend = end_y),
-                 arrow = arrow(length = unit(0.3, "cm")),
-                 alpha = 0.5, colour = label) +
+    geom_point(
+      aes(x = start_x, y = start_y), 
+      shape = 15, size = cex, show.legend = T
+    ) +
+    geom_point(
+      aes(x = end_x, y = end_y),
+      shape = 16, size = cex, show.legend = F
+    ) +
+    geom_segment(
+      aes(x = start_x, y = start_y, xend = end_x, yend = end_y, colour = label),
+      arrow = arrow(length = unit(0.3, "cm")), alpha = 0.5
+    ) +
 #     geom_text(aes(x = PC1_A, y = PC2_A,
 #                   label = rownames(subtype_pca)),
 #               position = position_nudge(x = 4, y = 2), size = 2.5) +
-    geom_point(data = norm_pca, aes(x = PC1, y = PC2),
-               size = cex, shape = 17)
+    geom_point(
+      data = norm_pca,
+      aes(x = PC1, y = PC2),
+      size = cex, shape = 17
+    ) # +
+    # scale_color_manual(values = c('black', 'red'))
   
   if (pca) {
     scatter_pca <- scatter_pca +
@@ -280,51 +467,65 @@ plot_vectors <- function(
 
 #' Plots boxplot of features
 #' Provides p-values from wilcoxon rank-sum test
-plot_boxplots <- function(X_y) {
-  # WARNING: Manual inputted values 
-  FEAT_ORDER <- c(
-    "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
-    "log_mrd_d33", "p_d8", "p_d33"
-  )
-  FEAT_LABS <- c(
-    "'ERM Ratio'", "'ARM Ratio'", "theta",
-    "log[10](MRD)", "paste('P(Remission|', x[D8], ', s)')",
-    "paste('P(Remission|', x[D33], ', s)')"
-  )
-  # TODO: Check column names of X_y
+#' If different group and color is provided X_y is flattened accordingly
+#'
+#' @import ggplot2
+#' @importFrom tibble rownames_to_column
+#' @importFrom tidyr gather
+#' @export
+plot_boxplot <- function(
+  X_y,
+  features = c("erm1_ratio2", "l2norm_ratio2", "angle_LD0_LD8_ratio2", "log_mrd_d33"),
+  group = 'label',
+  fill = 'label',
+  p.value = TRUE,
+  show.legend = FALSE,
+  ...
+) {
+  aes_extra <- list(...)
+  pch_treatment <- 21:24
+  names(pch_treatment) <- c('SR', 'IR', 'HR1', 'HR2')
   
-  X_y <- tibble::rownames_to_column(X_y)
-  long_X_y <- melt(X_y, id = c("label", "rowname"), variable.name = "feature")
+  # Assert that all features are present in data provided
+  feature_idx <- sapply(features, match, colnames(X_y))
+  stopifnot(!is.na(sum(feature_idx)))
+  
+  # WARNING: Manual inputted values 
+  feature_order <- c(features, "p_d8", "p_d33")
+  feature_labels <- c(
+    "'ERM Ratio'", "'ARM Ratio'", "phi",
+    "log[10](MRD)", "paste('P(Remission|', bold(x['D8']), ', s)')",
+    "paste('P(Remission|', bold(x['D33']), ', s)')"
+  )
+ 
+  X_y <- rownames_to_column(X_y)
+  features <- colnames(X_y)
+  # All features aside from those in feature_order are gathered
+  patient_info <- unique(setdiff(features, feature_order))
+  long_X_y <- gather(X_y, key = "feature", value = "value", -patient_info)
+  
   # Reorder levels and label features
   long_X_y$feature <- factor(
     long_X_y$feature,
-    levels = FEAT_ORDER,
-    labels = FEAT_LABS
+    levels = feature_order,
+    labels = feature_labels
   )
-  levels(long_X_y$label) <- c("Remission", "Relapse")
   
   ax_jitter <- ggplot(
     long_X_y,
-    aes(x = label, y = value, label = rowname)
+    aes_string(x = group, y = 'value', label = 'rowname', fill = fill)
   ) +
     geom_boxplot(
-      aes(group = label),
+      aes_string(group = group),
       col = "black", alpha = 0,
-      show.legend = F
-    ) +
-    geom_point(
-      aes(fill = label),
-      position = position_jitterdodge(jitter.width = 1, seed = 1),
-      cex = 2.5, pch = 21, alpha = 1,
-      col = "black", show.legend = FALSE
+      show.legend = show.legend
     ) +
     # geom_text(
     #   aes(col = label),
     #   position = position_jitterdodge(jitter.width = 1, seed = 1),
     #   cex = 2.5, show.legend = FALSE
     # ) + 
-    scale_fill_manual(values = COL_LABEL) +
-    scale_color_manual(values = COL_LABEL) +
+    scale_shape_manual(values = pch_treatment) +
     facet_wrap(
       ~feature,
       nrow = 1, scales = "free",
@@ -333,57 +534,84 @@ plot_boxplots <- function(X_y) {
     theme(
       axis.title.x = element_blank(),
       axis.text.x = element_text(angle = 15),
-      axis.title.y = element_blank(),
-      legend.position = "none"
+      axis.title.y = element_blank()
+      # legend.position = "none"
     )
-  
+
+  ### Plot options ###
+  if (fill == 'label') {
+    ax_jitter <- ax_jitter + scale_fill_manual(values = COL_LABEL)
+  }
+
+  if ('pch' %in% names(aes_extra)) {
+    ax_jitter <- ax_jitter +
+      geom_point(
+        aes_string(...),
+        position = position_jitterdodge(jitter.width = 1, seed = 1),
+        cex = 2.5, alpha = 1, col = "black", show.legend = show.legend
+      )
+  } else {
+    ax_jitter <- ax_jitter +
+      geom_point(
+        aes_string(...),
+        position = position_jitterdodge(jitter.width = 1, seed = 1),
+        pch = 21, cex = 2.5, alpha = 1, col = "black",
+        show.legend = show.legend
+      )
+  }
+
   # Jitter plot: p-value label
   # Both group sizes must be > 1
-  if (length(table(X_y$label)) > 1 && min(table(X_y$label)) > 1) {
-    p_labs <- sapply(
-      FEAT_ORDER,
-      function(idx) {
-        list_feat <- split(X_y[, idx], X_y$label)
-        tryCatch(
-          {
-            htest <- wilcox.test(
-              list_feat[[1]], list_feat[[2]], exact  = T
-            )
-            sprintf("p = %.3f", htest$p.value)
-          },
-          error = function(err) {
-            print(err)
-            return(err)
-          }
-        )
-      }
+  
+  if (p.value && length(table(X_y[[group]])) > 1 && min(table(X_y[[group]])) > 1) {
+    
+    stat_label <- sapply(feature_order, function(idx) {
+      x1_x2 <- split(X_y[, idx], X_y[[group]])
+      tryCatch(
+        {
+          # Wilcoxon test p-value
+          x1 <- x1_x2[[1]]
+          x2 <- x1_x2[[2]]
+          htest <- wilcox.test(x1, x2, exact = T)
+          mean_diff <- mean(x1) - mean(x2)
+          # Cohen's d assuming unequal var. Hence sd = sqrt((s_1^2 + s_2^2)/2)
+          sd_unequal <- mean(c(var(x1), var(x2))) ^ .5
+          cohen_d <- mean_diff / sd_unequal
+          sprintf("p = %.3f\nd = %.2f", htest$p.value, cohen_d)
+        },
+        error = function(err) {
+          print(err)
+          return(err)
+        }
+      )
+    })
+   
+    x_coord <- rep(1.55, 6)
+    x_coord[4] <- 0.55
+
+    compute_ycoord <- function(x) 0.92 * (max(x) - min(x)) + min(x)
+    y_coord <- c(
+      compute_ycoord(X_y[feature_order[1]]),
+      compute_ycoord(X_y[feature_order[2]]),
+      compute_ycoord(X_y[feature_order[3]]),        
+      compute_ycoord(X_y[feature_order[4]]),
+      compute_ycoord(X_y[feature_order[5]]),
+      compute_ycoord(X_y[feature_order[6]])
     )
     
-    # WARNING: Manual inputted values 
     ann_text <- data.frame(
-      feature = factor(
-        FEAT_ORDER,
-        levels = FEAT_ORDER,
-        labels = FEAT_LABS
-      ),
-      value = c(
-        max(X_y[FEAT_ORDER[1]]),
-        max(X_y[FEAT_ORDER[2]]),
-        min(X_y[FEAT_ORDER[3]]),        
-        min(X_y[FEAT_ORDER[4]]),
-        max(X_y[FEAT_ORDER[5]]),
-        max(X_y[FEAT_ORDER[6]])
-      ),
-      lab = p_labs
+      feature = factor(feature_order, levels = feature_order, labels = feature_labels),
+      x_coord = x_coord,
+      y_coord = y_coord, 
+      stat_label = stat_label
     )
     ann_text <- na.omit(ann_text)
 
     ax_jitter <- ax_jitter +
       geom_text(
         data = ann_text,
-        aes(x = 1.5, y = value, label = lab),
-        size = 3, # colour = "black",
-        hjust = 0
+        aes(x = x_coord, y = y_coord, label = stat_label),
+        size = 3, hjust = 0 # colour = "black"
       )
   }
   
@@ -394,7 +622,11 @@ plot_boxplots <- function(X_y) {
 #' Plots boxplots according to colour and shape provided
 #' No statistical tests conducted between groups.
 #' Plots both proba (D8) and (D33)
+#'
 #' @param colour_by string indicating name feature to group colour by
+#' @import ggplot2
+#' @importFrom tidyr gather
+#' @export
 plot_boxplots_v2 <- function(X_y, colour_by, shape_by) {
   FEAT_ORDER <- c(
     "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
@@ -406,10 +638,9 @@ plot_boxplots_v2 <- function(X_y, colour_by, shape_by) {
     "paste('P(Remission|', bold(x[D33]), ', s)')"
   )
  
-  long_X_y <- melt(
-    X_y,
-    id = c(colour_by, shape_by),
-    variable.name = "feature"
+  long_X_y <- gather(
+    X_y, key = "feature", value = "value",
+    -c(colour_by, shape_by)
   )
   # Reorder levels and label features
   long_X_y$feature <- factor(
@@ -612,7 +843,7 @@ plotHeatmapSubtype <- function(X, metadata_df) {
 
 plot_mean <- function(df, batch_vec1) {
   # Melt dataframe
-  melt_df <- melt(df, variable.name = "ID")
+  melt_df <- gather(df, key = "ID", value = "value")
   print(head(melt_df))
   # Trimmed mean probe intensities for each chip
   mean_tibble <- melt_df %>% group_by(ID) %>%
@@ -636,7 +867,7 @@ plotExplore <- function(df1, metadata_df) {
   class_factor <- metadata_df[colnames(df1),"class_info"]
   
   # Melt dataframe
-  melt_df <- melt(df1, measure.vars = colnames(df1), variable.name = "ID")
+  melt_df <- gather(df1, key = "ID", value = "value") 
   melt_df$batch <- as.factor(metadata_df[melt_df$ID,"batch_info"])
   melt_df$class <- metadata_df[melt_df$ID,"class_info"]
   
@@ -725,6 +956,7 @@ ggplot_palette <- function(n) {
   return(hcl(h = hues, c = 100, l = 65)[1:n])
 }
 
+#' @param D dataframe containing columns: c(score, label, treatment)
 #' @param treatment character indicating treatment or treatment_current
 #' to use for scoring and as fill color
 plot_barchart <- function(
@@ -742,35 +974,40 @@ plot_barchart <- function(
   risk_levels <- c("SR", "IR", "HR")
   names(colors) <- risk_levels
   
-  # Mutating D
-  D$prediction <- factor(D$prediction, levels = risk_levels)
-  
   # Awarding theoretical scores
   D1 <- D[c("label", treatment)] # final or current treatment
   colnames(D1)[2] <- "treatment"
   theoretical_scoring_table <- data.frame(
-    label = rep(c("Remission", "Relapse"), each = 3),
-    treatment = rep(risk_levels, 2),
-    scores = c("1", "1", "1", "0", "0", "1")
+    label = factor(
+      rep(c("Remission", "Relapse"), each = 3),
+      levels = c("Remission", "Relapse")
+    ),
+    treatment = factor(rep(risk_levels, 2), levels = risk_levels),
+    score = c("1", "1", "1", "0", "0", "1")
   )
   D2 <- merge(D1, theoretical_scoring_table, by = c("label", "treatment"))
-  
+  score_labs <- c("Score: 0", "Score: 1")
+  names(score_labs) <- c("0", "1") 
+
   ggplot(D) +
-    facet_grid(label ~ scores) +
+    facet_grid(
+      label ~ score,
+      labeller = labeller(score = score_labs)
+    ) +
     geom_bar(
-      aes_string(fill = treatment, x = "prediction"), # final or current treatment
+      aes_string(x = "prediction", fill = treatment), # final or current treatment
       show.legend = show.legend
     ) +
     geom_bar(
       data = D2, aes(x = treatment),
       alpha = 0, color = "black", show.legend = show.legend
     ) +
-    scale_fill_manual(values = colors) +
-    # TODO: Change labels  
+    scale_fill_manual(values = colors, drop = FALSE) +
+    scale_x_discrete(drop = FALSE) +
     labs(
       title = sprintf(
-        "%s Scores (Total: %d/%d)",
-        timepoint, sum(D$scores), nrow(D)
+        "%s (Total: %d/%d)",
+        timepoint, sum(D$score), nrow(D)
       ),
       x = "Predicted risk level", y = "Count",
       fill = treatment_caption 

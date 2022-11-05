@@ -1,5 +1,7 @@
-library(testthat)
+#!/usr/bin/env Rscript
+
 library(magrittr)
+library(testthat)
 
 source("../R/calc.R")
 source("../R/misc.R")
@@ -69,10 +71,13 @@ sid_subtype <- sid_alltrain_local[
 ]
 X_subtype <- yeoh[, sid_subtype]
 
-print("Testing predict_pipeline...")
+
+cat("Testing predict_pipeline...\n")
 test_that("predict_pipeline estimates the correct direction for all features", {
   prediction <- predict_pipeline(
-    X_subtype, X_normal, metadata, metadata_pid, batch_ps
+    X_subtype, X_normal,
+    metadata, metadata_pid,
+    batch_ps
   )
   p_sub <- prediction$p_remission_xi %>%
     cbind(label = metadata_pid[rownames(.), "label"]) %>%
@@ -88,11 +93,38 @@ test_that("predict_pipeline estimates the correct direction for all features", {
     rank(X_y_sub$l2norm_ratio2) 
   )
   expect_equal(
-    rank(-p_sub$p_angle_d0d8_d0normal),
-    rank(X_y_sub$angle_d0d8_d0normal) 
+    rank(p_sub$p_angle_LD0_LD8_ratio2),
+    rank(X_y_sub$angle_LD0_LD8_ratio)
   )
   expect_equal(
     rank(-p_sub$p_log_mrd_d33),
     rank(X_y_sub$log_mrd_d33)
   )
+})
+
+
+cat("Testing compute_features...\n")
+test_that('compute_features computes the feature values correctly', {
+  # Simulated data
+  normal <- data.frame(x = rep(3, 3), y = rep(1, 3), z = rep(1, 3))
+  # 2 D0, 2 D8 samples
+  # Match correct answer for P01 only
+  sid <- paste0(
+    rep(c('P01', 'P02'), 2),
+    rep(c('_D0', '_D8'), each = 2)
+  )
+  response <- data.frame(
+    x = c(1, 1, 2, 2),
+    y = c(2, 0, 3, 1),
+    z = rep(1, 4),
+    row.names = sid 
+  )
+
+  features <- compute_features(response, normal, sid, sid)
+  chosen_features <- c('erm1_ratio2', 'l2norm_ratio2', 'angle_LD0_LD8_ratio2')
+  P01 <- features['P01', chosen_features, drop = F]
+  
+  expect_equal(P01$erm1_ratio2, 1)
+  expect_equal(P01$l2norm_ratio2, 0.4^0.5)
+  expect_equal(P01$angle_LD0_LD8_ratio2, (pi / 2 - atan(2)) / atan(2))
 })

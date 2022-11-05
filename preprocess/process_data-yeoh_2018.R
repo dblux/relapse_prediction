@@ -44,7 +44,10 @@ yeoh_d33 <- read.table("data/leuk_D33/processed/mas5_filtered.tsv",
 
 ## Removal of outlier samples and their associated pairs
 # Patients "P198_D8", "P186_D0" are associated pairs
-outlier_samples <- c("P198_D0", "P186_D8", "N03", "P198_D8", "P186_D0")
+outlier_samples <- c(
+    "P198_D0", "P186_D8", "N03",
+    "P198_D8", "P186_D0"
+)
 
 ## Identify patients with D0 and D8 profiles from different batches
 # for (i in seq(1,420,2)) {
