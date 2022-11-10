@@ -113,164 +113,151 @@ compute_features <- function(
   
   # Split response df into D0 and D8 df
   n <- nrow(response_df)/2
-  d0_df <- response_df[1:n, , drop = F]
-  d8_df <- response_df[-(1:n), , drop = F]
+  # D0 samples
+  OD0 <- response_df[1:n, , drop = F]
+  # D8 samples
+  OD8 <- response_df[-(1:n), , drop = F]
   
   # Calculate centroids
   # Only use remission patients in training set to calculate centroid
-  sid_leuk <- Reduce(
-    intersect,
-    list(rownames(d0_df), sid_train, sid_remission)
+  sid_leuk <- Reduce(intersect,
+    list(rownames(OD0), sid_train, sid_remission)
   )
-  
   cat(sprintf("No. of samples in centroid = %d\n", length(sid_leuk)))
-  leuk_centroid <- apply(d0_df[sid_leuk, , drop = F], 2, median)
-  normal_centroid <- apply(normal_df, 2, median)
+  # Leukemia centroid
+  OL <- apply(OD0[sid_leuk, , drop = F], 2, median)
+  # Normal centroid
+  ON <- apply(normal_df, 2, median)
   
-  # Calculate leuk-normal unit vector
-  leuk_normal <- normal_centroid - leuk_centroid
-  unit_leuk_normal <- leuk_normal/calcL2Norm(leuk_normal)
+  LN <- ON - OL
+  unit_LN <- LN / l2norm(LN)
+  D0D8 <- OD8 - OD0
+  D0N_T <- ON - t(OD0)
+  D8N_T <- ON - t(OD8)
+  LD0 <- sweep(OD0, 2, OL, FUN = `-`)
+  LD8 <- sweep(OD8, 2, OL, FUN = `-`)
   
-  # Assume that patients from top rows match correspondingly with bottom rows
-  # Calculate vector by: D8-D0
-  d0_d8_hstack <- d8_df - d0_df
-  # Multiplication of erm_factor is propagated through every column
+  # Scalar projection of D0N on LN
+  comp_LN_D0N <- colSums(D0N_T * unit_LN)
+  # Scalar projection of D8N on LN
+  comp_LN_D8N <- colSums(D8N_T * unit_LN)
+  
+  ### l2norm ###
+  l2norm_D0D8 <- apply(D0D8, 1, l2norm)
+  l2norm_OD0 <- apply(OD0, 1, l2norm)
+  l2norm_OD8 <- apply(OD8, 1, l2norm)
+  diff_l2norm <- l2norm_OD8 - l2norm_OD0
+  l2norm_D0N <- apply(D0N_T, 2, l2norm)
+  l2norm_D8N <- apply(D8N_T, 2, l2norm)
+  # l2norm of rejection of ND0 from NL
+  l2norm_rej_NL_ND0 <- sqrt(l2norm_D0N ^ 2 - comp_LN_D0N ^ 2) 
+  # l2norm of rejection of ND8 from NL
+  l2norm_rej_NL_ND8 <- sqrt(l2norm_D8N ^ 2 - comp_LN_D8N ^ 2) 
+  
+  # Unit vectors
+  # Calculate vstack of unit D0-Normal vectors
+  unit_D0N_T <- sweep(D0N_T, 2, l2norm_D0N, "/")
+  
+  # l2norm ratios
+  l2norm_ratio1 <- l2norm_D0D8 / l2norm_D0N
+  l2norm_ratio2 <- l2norm_D0D8 / l2norm_D8N
+  l2norm_diff <- l2norm_D0N - l2norm_D8N
+  l2norm_diff_ratio <- l2norm_diff / l2norm_D0D8
+  
   ### ERM1 ###
-  erm1 <- colSums(t(d0_d8_hstack) * unit_leuk_normal)
-  # Vertical stack of individual D0-Normal vectors
-  d0_normal_vstack <- normal_centroid - t(d0_df)
-  ### D0-Normal projection ###
-  d0_normal_proj <- colSums(d0_normal_vstack * unit_leuk_normal)
-  ### ERM1 Ratio ###
-  ## ERM1 / projection of D0-N on L-N
-  erm1_ratio1 <- erm1/d0_normal_proj
-  
-  d8_normal_vstack <- normal_centroid - t(d8_df)
-  ### D8-Normal projection ###
-  d8_normal_proj <- colSums(d8_normal_vstack * unit_leuk_normal)
-  
+  # Calculate scalar projection by dot product of a and unit b
+  erm1 <- colSums(t(D0D8) * unit_LN)
+  erm1_ratio1 <- erm1 / comp_LN_D0N
+  erm1_ratio2 <- erm1 / comp_LN_D8N
+  erm1_ratio3 <- erm1 / l2norm_D0D8
   stopifnot(identical(names(erm1), names(erm1_ratio1)))
   
-  # Calculate vstack of unit D0-Normal vectors
-  l2norm_d0_normal <- apply(d0_normal_vstack, 2, calcL2Norm)
-  unit_d0_normal_vstack <- sweep(d0_normal_vstack, 2, l2norm_d0_normal, "/")
-  
   ### ERM2 ###
-  ## Projection of D0-D8 on D0-N
-  erm2 <- colSums(t(d0_d8_hstack) * unit_d0_normal_vstack)
-  erm2_ratio <- erm2/l2norm_d0_normal
-  erm2_ratio2 <- erm2 / (l2norm_d0_normal - erm2)
-  
-  stopifnot(identical(names(erm2), names(erm2_ratio)))
+  # Projection of D0-D8 on D0-N
+  erm2 <- colSums(t(D0D8) * unit_D0N_T)
+  erm2_ratio1 <- erm2 / l2norm_D0N
+  erm2_ratio2 <- erm2 / (l2norm_D0N - erm2)
+  stopifnot(identical(names(erm2), names(erm2_ratio1)))
   
   ### ERM3 ###
   ## Along a chosen PC that represents timepoint
   PC <- 1
   # Be careful of direction of D0-N (may be negative)
   # If negative, a larger shift will lead to a smaller ERM3
-  dir <- sign(median(normal_df[,PC]) - median(d0_df[,PC]))
-  erm3 <- (d8_df[,PC] - d0_df[,PC]) * dir # direction is normalised
+  dir <- sign(median(normal_df[,PC]) - median(OD0[,PC]))
+  erm3 <- (OD8[,PC] - OD0[,PC]) * dir # direction is normalised
   # Divide by D0-Normal along PC
-  erm3_ratio <- erm3/(median(normal_df[,PC]) - d0_df[,PC])
-  
+  erm3_ratio <- erm3 / (median(normal_df[,PC]) - OD0[,PC])
   stopifnot(identical(names(erm3), names(erm3_ratio)))
   
-  ### l2norm ###
-  l2norm_d0_d8 <- apply(d0_d8_hstack, 1, calcL2Norm)
-  l2norm_d0 <- apply(d0_df, 1, calcL2Norm)
-  l2norm_d8 <- apply(d8_df, 1, calcL2Norm)
-  diff_l2norm <- l2norm_d8 - l2norm_d0
-  
-  ### Angle between D0-D8 and Leuk-Normal ###
-  angle_d0d8_normal <- apply(
-    d0_d8_hstack, 1, function(row_vec) calcAngleVectors(row_vec, leuk_normal)
+  # Angle between D0-D8 and Leuk-Normal
+  angle_D0D8_LN <- apply(
+    D0D8, 1, function(row_vec) calcAngleVectors(row_vec, LN)
   )
-  
-  ### Angle between D0-D8 and D0-Normal ###
-  angle_d0d8_d0normal <- mapply(calcAngleVectors,
-                                data.frame(t(d0_d8_hstack)),
-                                data.frame(d0_normal_vstack))
-  
-  ### Angle between D0 and D8 ###
-  angle_d0_d8 <- mapply(calcAngleVectors,
-                        data.frame(t(d0_df)), data.frame(t(d8_df)))
-  
-  ### Angle between D0 and normal ###
-  angle_d0_normal <- apply(
-    d0_df, 1, function(row_vec) calcAngleVectors(row_vec, normal_centroid)
+  # Angle between D0-D8 and D0-Normal
+  angle_D0D8_D0N <- mapply(
+    calcAngleVectors,
+    data.frame(t(D0D8)),
+    data.frame(D0N_T)
   )
-  
-  ### Angle between D8 and Normal ###
-  angle_d8_normal <- apply(
-    d8_df, 1, function(row_vec) calcAngleVectors(row_vec, normal_centroid)
+  # Angle between O-D0 and O-D8
+  angle_OD0_OD8 <- mapply(
+    calcAngleVectors,
+    data.frame(t(OD0)),
+    data.frame(t(OD8))
   )
-  
-  ### Angle between N-D0 and N-D8 ###
+  # Angle between O-D0 and O-N
+  angle_OD0_ON <- apply(
+    OD0, 1, function(row_vec) calcAngleVectors(row_vec, ON)
+  )
+  # Angle between O-D8 and O-N
+  angle_OD8_ON <- apply(
+    OD8, 1, function(row_vec) calcAngleVectors(row_vec, ON)
+  )
+  # Angle between N-D0 and N-D8
   # Equivalent to angle between D0-N and D8-N
-  angle_nd0_nd8 <- mapply(calcAngleVectors,
-                          data.frame(d0_normal_vstack),
-                          data.frame(d8_normal_vstack))
-  
-  ### Angle between N-centroid(D0) N-D8 ###
-  # Equivalent to angle between centroid(D0)-N and D8-N
-  angle_nl_nd8 <- sapply(data.frame(d8_normal_vstack),
-                         function(x, y) calcAngleVectors(x, y),
-                         leuk_normal)
-  
-  L_D0 <- d0_df - leuk_centroid
-  L_D8 <- d8_df - leuk_centroid
-  
-  # Angle between LD0 and LD8
+  angle_ND0_ND8 <- mapply(
+    calcAngleVectors,
+    data.frame(D0N_T),
+    data.frame(D8N_T)
+  )
+  # Angle between NL and ND0
+  # Equivalent to angle between LN and D0-N
+  angle_NL_ND0 <- sapply(data.frame(D0N_T), function(x) calcAngleVectors(x, LN))
+  angle_NL_ND8 <- sapply(data.frame(D8N_T), function(x) calcAngleVectors(x, LN))
   angle_LD0_LD8 <- mapply(
     calcAngleVectors,
-    data.frame(t(L_D0)),
-    data.frame(t(L_D8))
+    data.frame(t(LD0)),
+    data.frame(t(LD8))
   ) 
-
-  # Angle between LD0 and LN
   angle_LD0_LN <- mapply(
     calcAngleVectors,
-    data.frame(t(L_D0)),
-    data.frame(matrix(leuk_normal))
+    data.frame(t(LD0)),
+    data.frame(matrix(LN))
   ) 
-
-  # Angle between LD8 and LN
   angle_LD8_LN <- mapply(
     calcAngleVectors,
-    data.frame(t(L_D8)),
-    data.frame(matrix(leuk_normal))
+    data.frame(t(LD8)),
+    data.frame(matrix(LN))
   )
 
   angle_LD0_LD8_ratio1 <- angle_LD0_LD8 / angle_LD0_LN
   angle_LD0_LD8_ratio2 <- angle_LD0_LD8 / angle_LD8_LN
+  
 
-  ### L2-norm between D8 and Normal ###
-  l2norm_d8_normal <- apply(d8_normal_vstack, 2, calcL2Norm)
-  
-  ### L2-norm ratios
-  l2norm_ratio1 <- l2norm_d0_d8/l2norm_d0_normal
-  l2norm_ratio2 <- l2norm_d0_d8/l2norm_d8_normal
-  l2norm_diff <- l2norm_d0_normal - l2norm_d8_normal
-  l2norm_diff_ratio <- l2norm_diff/l2norm_d0_d8
-  
-  ### Ratios
-  erm1_ratio2 <- erm1/abs(d8_normal_proj)
-  erm1_ratio3 <- erm1/l2norm_d0_d8
-  
-  ### Concatenate all features ###
   features <- data.frame(
     erm1, erm1_ratio1, erm1_ratio2, erm1_ratio3,
-    erm2, erm2_ratio, erm2_ratio2,
-    erm3, erm3_ratio,
-    d0_normal_proj, d8_normal_proj, l2norm_d0_d8, diff_l2norm,
-    angle_d0_d8, angle_nd0_nd8, angle_nl_nd8,
-    angle_d0d8_normal, angle_d0d8_d0normal,
-    angle_d0_normal, angle_d8_normal,
-    angle_LD0_LD8, angle_LD0_LN, angle_LD8_LN,
-    angle_LD0_LD8_ratio1, angle_LD0_LD8_ratio2, 
-    l2norm_d0_normal, l2norm_d8_normal,
+    erm2, erm2_ratio1, erm2_ratio2, erm3, erm3_ratio,
+    l2norm_D0N, l2norm_D8N,
     l2norm_ratio1, l2norm_ratio2,
-    l2norm_diff, l2norm_diff_ratio
+    l2norm_diff, l2norm_diff_ratio, l2norm_D0D8, diff_l2norm,
+    l2norm_rej_NL_ND0, l2norm_rej_NL_ND8, 
+    comp_LN_D0N, comp_LN_D8N,
+    angle_NL_ND0, angle_NL_ND8,
+    angle_D0D8_LN, angle_D0D8_D0N,
+    angle_LD0_LD8, angle_LD0_LN, angle_LD8_LN,
+    angle_OD0_ON, angle_OD8_ON, angle_OD0_OD8, angle_ND0_ND8,
+    angle_LD0_LD8_ratio1, angle_LD0_LD8_ratio2 
   )
   rownames(features) <- substring(rownames(features), 1, 4)
   

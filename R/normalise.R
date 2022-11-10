@@ -1,6 +1,6 @@
 # Cosine normalisation / L2-norm normalisation
 normaliseCosine <- function(df1) {
-  l2norm_vec <- apply(df1, 2, calcL2Norm)
+  l2norm_vec <- apply(df1, 2, l2norm) 
   return(mapply(`/`, df1, l2norm_vec))
 }
 
