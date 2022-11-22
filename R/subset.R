@@ -61,7 +61,7 @@ select_highexpr <- function(X, n, return.features = FALSE) {
 
 # Filter probes with too many zeros
 #' @param df dataframe
-#' @param percent_threshold percentage threshold of non-zero values
+#' @param percent_threshold minimum percentage threshold of non-zero values
 #' @param metadata_df df containing class labels of samples
 #' @param logical_func a function that is either "all" or "any". (Either all or
 #' just one class have to pass the threshold)

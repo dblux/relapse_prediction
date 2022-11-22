@@ -482,3 +482,117 @@ predict_pipeline <- function(
     ))
   }
 }
+
+
+#' @param features features to be imputed
+#' @return r_sq matrix with size batch by size all other batches
+#' @return is_present dataframe of size features by size of all other batches
+pairwise_lm <- function(X, batch, features, metadata) {
+  is_batch <- metadata[colnames(X), 'batch_info'] == batch
+  ids <- colnames(X)[is_batch]
+  ids_others <- colnames(X)[!is_batch]
+
+  is_present <- X[features, ids_others] != 0
+  n_present <- colSums(is_present)
+  r_sq <- matrix(0, length(ids), length(ids_others), dimnames = list(ids, ids_others))
+  intercept <- matrix(0, length(ids), length(ids_others), dimnames = list(ids, ids_others))
+  slope <- matrix(0, length(ids), length(ids_others), dimnames = list(ids, ids_others))
+  
+  for (i in seq_along(ids)) {
+    s1 <- ids[i]
+    for (j in seq_along(ids_others)) {
+      s2 <- ids_others[j]
+      pair <- X[c(s1, s2)]
+      # removes all features where any value is zero
+      pair <- pair[rowSums(pair != 0) == 2, ]
+      pair <- log2(pair)
+      colnames(pair) <- c('y', 'x')
+      summary_model <- summary(lm(y ~ x, data = pair))
+      r_sq[i, j] <- summary_model$r.squared
+      intercept[i, j] <- summary_model$coefficients['(Intercept)', 'Estimate']
+      slope[i, j] <- summary_model$coefficients['x', 'Estimate']
+    }
+  }
+  pairwise <- list(
+    r_sq = r_sq, is_present = is_present,
+    intercept = intercept, slope = slope
+  )
+  attr(pairwise, 'class') <- 'pairwise'
+  
+  pairwise
+}
+
+
+impute <- function(X, pairwise, k = 5) {
+  r_sq <- pairwise$r_sq
+  is_present <- pairwise$is_present
+  n_present <- colSums(is_present)
+  features <- rownames(is_present)
+  
+  # filter out samples that cannot predict a single feature
+  ids_ms <- names(n_present)[n_present == 0]
+  if (length(ids_ms) != 0)
+    stop('TODO: Filter out samples that cannot be used.')
+  
+  # compute predictions from all knns
+  knn_predictions <- vector('list', length = nrow(r_sq))
+  names(knn_predictions) <- rownames(r_sq)
+  for (id in rownames(r_sq)) {
+    sorted_ids <- colnames(r_sq)[order(as.numeric(r_sq[id, ]), decreasing = TRUE)]
+    knns <- head(sorted_ids, k * 2)
+    knns_npresent <- colSums(is_present[, knns])
+    # if all features can be represented by k nearest neighbours
+    if (all(knns_npresent[seq(k)] == length(features))) {
+      predictions <- matrix(
+        0, length(features), k,
+        dimnames = list(features, knns[seq(k)])
+      )
+      for (nn in knns[seq(k)]) {
+        b_0 <- pairwise$intercept[id, nn]
+        b_1 <- pairwise$slope[id, nn]
+        for (feature in features) {
+          predictions[feature, nn] <- 2 ^ (b_0 + b_1 * log2(X[feature, nn]))
+        }
+      }
+      knn_predictions[[id]] <- predictions
+    } else{
+      # select the best knns for each feature
+      features_npresent <- rowSums(is_present[, knns])
+      if (any(features_npresent < k))
+        stop('TODO: implement increase to 3 * k buffer instead of 2 * k')
+      
+      predictions <- matrix(
+        0, length(features), k,
+        dimnames = list(features, paste0('nn', seq(k))) 
+      )
+      cnt <- rep(1, length(features))
+      names(cnt) <- features
+      i <- 1
+      while (any(cnt <= k)) {
+        nn <- knns[i]
+        b_0 <- pairwise$intercept[id, nn]
+        b_1 <- pairwise$slope[id, nn]
+        for (feature in features) {
+          if (is_present[feature, nn] && cnt[feature] <= k) {
+            predictions[feature, cnt[feature]] <- 2 ^ (b_0 + b_1 * log2(X[feature, nn]))
+            cnt[feature] <- cnt[feature] + 1
+          }
+        }
+        i <- i + 1
+      }
+      # print(id)
+      knn_predictions[[id]] <- predictions
+    }
+  }
+  
+  # consolidate predictions and execute prediction
+  for (id in names(knn_predictions)) {
+    predictions <- knn_predictions[[id]]
+    values <- apply(predictions, 1, median)
+    for (feature in names(values)) {
+      X[feature, id] <- values[feature]
+    }
+  }
+
+  list(X = X, knn_predictions = knn_predictions)
+}
