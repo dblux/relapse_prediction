@@ -93,7 +93,7 @@ ggplot_top_pc <- function(
   Z_metadata <- cbind(Z, metadata1)
   
   # Convert data to long format
-  Z_long <- gather(Z_metadata, key = "PC", value = "value", -plot_factors)
+  Z_long <- tidyr::gather(Z_metadata, key = "PC", value = "value", -plot_factors)
   
   ggplot(Z_long, aes_string(x = x_axis, y = "value", ...)) +
     facet_wrap(
@@ -561,9 +561,10 @@ plot_boxplot <- function(
   }
 
   # Jitter plot: p-value label
+  has_classes <- length(table(X_y[[group]])) > 1
   # Both group sizes must be > 1
-  
-  if (p.value && length(table(X_y[[group]])) > 1 && min(table(X_y[[group]])) > 1) {
+  has_samples <- min(table(X_y[[group]])) > 1
+  if (p.value && has_classes && has_samples) {
     
     stat_label <- sapply(feature_order, function(idx) {
       x1_x2 <- split(X_y[, idx], X_y[[group]])

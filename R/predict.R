@@ -82,7 +82,6 @@ identify_DE <- function(
     length(median_logfc1) - length(selected_median_logfc)
   ))
   # feat_top_median_logfc <- names(head(sort(selected_median_logfc), N))
-  
   # # Custom t-statistic
   # deviation_median <- sweep(paired_logfc, 1, median_logfc, "-")
   # median_abs_dev <- apply(abs(deviation_median), 1, median)
@@ -167,10 +166,15 @@ compute_features <- function(
   ### ERM1 ###
   # Calculate scalar projection by dot product of a and unit b
   erm1 <- colSums(t(D0D8) * unit_LN)
-  erm1_ratio1 <- erm1 / comp_LN_D0N
-  erm1_ratio2 <- erm1 / comp_LN_D8N
+  erm1_ratio1 <- erm1 / abs(comp_LN_D0N)
+  erm1_ratio2 <- erm1 / abs(comp_LN_D8N)
   erm1_ratio3 <- erm1 / l2norm_D0D8
   stopifnot(identical(names(erm1), names(erm1_ratio1)))
+  # Patients whose D8 have exceeded N along LN
+  if (any(comp_LN_D8N < 0)) {
+    pid_exceed <- names(comp_LN_D8N)[comp_LN_D8N < 0]
+    cat(sprintf("%s has a negative comp_LN_D8N!\n", pid_exceed))
+  }
   
   ### ERM2 ###
   # Projection of D0-D8 on D0-N
@@ -483,105 +487,122 @@ predict_pipeline <- function(
   }
 }
 
-
+#' @param X dataframe of dim (n_features, n_samples)
+#' @param batch numeric of batch number to be imputed
 #' @param features features to be imputed
-#' @return r_sq matrix with size batch by size all other batches
-#' @return is_present dataframe of size features by size of all other batches
-pairwise_lm <- function(X, batch, features, metadata) {
-  is_batch <- metadata[colnames(X), 'batch_info'] == batch
+#' @return r_sq matrix with dim (batch_size, n_samples)
+#' @return is_present dataframe with dim (n_features, n_samples)
+pairwise_lm <- function(X, metadata, batch, features = rownames(X)) {
+  is_batch <- metadata[colnames(X), "batch_info"] == batch
   ids <- colnames(X)[is_batch]
   ids_others <- colnames(X)[!is_batch]
 
-  is_present <- X[features, ids_others] != 0
-  n_present <- colSums(is_present)
-  r_sq <- matrix(0, length(ids), length(ids_others), dimnames = list(ids, ids_others))
-  intercept <- matrix(0, length(ids), length(ids_others), dimnames = list(ids, ids_others))
-  slope <- matrix(0, length(ids), length(ids_others), dimnames = list(ids, ids_others))
-  
-  for (i in seq_along(ids)) {
-    s1 <- ids[i]
-    for (j in seq_along(ids_others)) {
-      s2 <- ids_others[j]
-      pair <- X[c(s1, s2)]
-      # removes all features where any value is zero
-      pair <- pair[rowSums(pair != 0) == 2, ]
-      pair <- log2(pair)
-      colnames(pair) <- c('y', 'x')
-      summary_model <- summary(lm(y ~ x, data = pair))
-      r_sq[i, j] <- summary_model$r.squared
-      intercept[i, j] <- summary_model$coefficients['(Intercept)', 'Estimate']
-      slope[i, j] <- summary_model$coefficients['x', 'Estimate']
+  is_present <- X[features, ] != 0
+  r_sq <- intercept <- slope <- matrix(
+    0, length(ids), ncol(X),
+    dimnames = list(ids, colnames(X))
+  )
+  for (i in ids) {
+    for (j in colnames(X)) {
+      if (i != j) {
+        pair <- X[c(i, j)]
+        # only keep features where both values are not zero
+        pair <- log2(pair[rowSums(pair != 0) == 2, ])
+        colnames(pair) <- c("y", "x")
+        summary_model <- summary(lm(y ~ x, data = pair))
+        r_sq[i, j] <- summary_model$r.squared
+        intercept[i, j] <- summary_model$coefficients["(Intercept)", "Estimate"]
+        slope[i, j] <- summary_model$coefficients["x", "Estimate"]
+      } else {
+        r_sq[i, j] <- NA 
+        intercept[i, j] <- 0 
+        slope[i, j] <- 1 
+      }
     }
   }
   pairwise <- list(
     r_sq = r_sq, is_present = is_present,
     intercept = intercept, slope = slope
   )
-  attr(pairwise, 'class') <- 'pairwise'
+  class(pairwise) <- "pairwise"
   
   pairwise
 }
 
 
-impute <- function(X, pairwise, k = 5) {
+impute_partial <- function(X, pairwise, k = 5) {
   r_sq <- pairwise$r_sq
   is_present <- pairwise$is_present
   n_present <- colSums(is_present)
   features <- rownames(is_present)
   
-  # filter out samples that cannot predict a single feature
-  ids_ms <- names(n_present)[n_present == 0]
-  if (length(ids_ms) != 0)
-    stop('TODO: Filter out samples that cannot be used.')
+  # # filter out samples that cannot predict a single feature
+  # # shift up to pairwise function
+  # rest_n_present <- n_present[colnames(r_sq)]
+  # ids_ms <- names(rest_n_present)[rest_n_present == 0]
+  # if (length(ids_ms) != 0)
+  #   stop('TODO: Filter out samples that cannot be used.')
   
-  # compute predictions from all knns
-  knn_predictions <- vector('list', length = nrow(r_sq))
+  # each id has a predictions matrix of shape (n_missing_features, k)
+  # different ids have different missing features
+  knn_predictions <- kneighbours <- vector("list", length = nrow(r_sq))
   names(knn_predictions) <- rownames(r_sq)
+  names(kneighbours) <- rownames(r_sq)
   for (id in rownames(r_sq)) {
-    sorted_ids <- colnames(r_sq)[order(as.numeric(r_sq[id, ]), decreasing = TRUE)]
-    knns <- head(sorted_ids, k * 2)
-    knns_npresent <- colSums(is_present[, knns])
+    missing_features <- features[!is_present[, id]]
+    nearest_neighbours <- colnames(r_sq)[
+      order(as.numeric(r_sq[id, ]), decreasing = TRUE)]
+    
+    predictions <- kns <- matrix(
+      NA, length(missing_features), k,
+      dimnames = list(missing_features, paste0("nn", seq(k))) 
+    )
     # if all features can be represented by k nearest neighbours
-    if (all(knns_npresent[seq(k)] == length(features))) {
-      predictions <- matrix(
-        0, length(features), k,
-        dimnames = list(features, knns[seq(k)])
-      )
-      for (nn in knns[seq(k)]) {
+    knns <- nearest_neighbours[seq(k)]
+    knns_npresent <- colSums(is_present[, knns])
+    if (all(knns_npresent == length(missing_features))) {
+      print("knns are the same across all missing features!")
+      for (i in seq(k)) {
+        nn <- nearest_neighbours[i]
         b_0 <- pairwise$intercept[id, nn]
         b_1 <- pairwise$slope[id, nn]
-        for (feature in features) {
-          predictions[feature, nn] <- 2 ^ (b_0 + b_1 * log2(X[feature, nn]))
+        for (feature in missing_features) {
+          predictions[feature, i] <- 2 ^ (b_0 + b_1 * log2(X[feature, nn]))
         }
       }
       knn_predictions[[id]] <- predictions
+      kneighbours[[id]] <- t(replicate(
+        length(missing_features), nearest_neighbours[seq(k)]
+      ))
     } else{
       # select the best knns for each feature
-      features_npresent <- rowSums(is_present[, knns])
-      if (any(features_npresent < k))
-        stop('TODO: implement increase to 3 * k buffer instead of 2 * k')
-      
-      predictions <- matrix(
-        0, length(features), k,
-        dimnames = list(features, paste0('nn', seq(k))) 
-      )
-      cnt <- rep(1, length(features))
-      names(cnt) <- features
+      # check whether all features have enough samples with non-zero values
+      if (any(rowSums(is_present) < k)) {
+        stop(paste(
+          "Insufficient samples with non-missing values to impute some",
+          "features. Try decreasing k."
+        ))
+      }
+      # count to keep track of no. of values for each feature
+      cnt <- rep(1, length(missing_features))
+      names(cnt) <- missing_features
       i <- 1
       while (any(cnt <= k)) {
-        nn <- knns[i]
+        nn <- nearest_neighbours[i]
         b_0 <- pairwise$intercept[id, nn]
         b_1 <- pairwise$slope[id, nn]
-        for (feature in features) {
+        for (feature in missing_features) {
           if (is_present[feature, nn] && cnt[feature] <= k) {
-            predictions[feature, cnt[feature]] <- 2 ^ (b_0 + b_1 * log2(X[feature, nn]))
+            predictions[feature, cnt[feature]] <-
+              2 ^ (b_0 + b_1 * log2(X[feature, nn]))
+            kns[feature, cnt[feature]] <- nn
             cnt[feature] <- cnt[feature] + 1
           }
         }
         i <- i + 1
       }
-      # print(id)
       knn_predictions[[id]] <- predictions
+      kneighbours[[id]] <- kns
     }
   }
   
@@ -594,5 +615,65 @@ impute <- function(X, pairwise, k = 5) {
     }
   }
 
-  list(X = X, knn_predictions = knn_predictions)
+  list(X = X, knn_predictions = knn_predictions, kneighbours = kneighbours)
+}
+
+
+#' Scales affymetrix probesets with batch scale factor
+#'
+#' @param X dataframe of shape (n_features, n) with raw expression values
+#' @param metadata dataframe of shape (n, n_info)
+#' @param affy_positive character containing positive control affymetrix probesets
+#' @param @return dataframe of shape (n_affy, n) ?
+scale_batch_affy <- function(
+  X, metadata, affy_positive,
+  batches = NULL, plot = FALSE
+) {
+  if (is.null(batches))
+    batches <- levels(metadata$batch_info)
+  
+  is_affy <- startsWith(rownames(X), 'AFFX')
+  X_affy <- X[affy_positive, ]
+  X_notaffy <- X[!is_affy, ]
+  affy_ratio <- data.frame(
+    # mean of non-missing values only!
+    mean_affy = colSums(X_affy) / colSums(X_affy != 0),
+    mean_notaffy = colSums(X_notaffy) / colSums(X_notaffy != 0),
+    metadata[colnames(X), ]
+  )
+  
+  ax <- ggplot(affy_ratio) +
+    geom_point(
+      aes(
+        x = mean_notaffy, y = mean_affy,
+        col = batch_info, shape = class_info
+      ), cex = 2
+    )
+  
+  slopes <- sapply(batches, function(batch) {
+    batch_ratio <- subset(affy_ratio, batch_info == batch)
+    # if batch is missing from data
+    if (nrow(batch_ratio) == 0)
+      return(NA)    
+    # linear model with no intercept
+    unname(coef(lm(mean_affy ~ mean_notaffy + 0, data = batch_ratio)))
+  })
+  slopes <- na.omit(slopes)
+  target_slope <- mean(slopes, trim = 0.5)
+  
+  for (batch in names(slopes)) {
+    slope <- slopes[batch]
+    batch_scale_factor <- target_slope / slope
+    is_batch <- metadata[colnames(X), "batch_info"] == batch
+    X_affy[, is_batch] <- X_affy[, is_batch] * batch_scale_factor
+    cat(sprintf(
+      "Scaled batch %s with original slope of %.2f to %.2f\n",
+      as.character(batch), slope, target_slope
+    ))
+  }
+  
+  if (plot)
+    return(list(X = X_affy, plot = ax))
+
+  X_affy
 }

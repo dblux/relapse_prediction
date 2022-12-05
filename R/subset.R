@@ -3,8 +3,8 @@
 #' Colnames of X has to match with rownames of annot.
 #'
 #' @example subset_cols(X, annot, subtype == 'BCR-ABL' & class_info == 'D0')
-subset_cols <- function(data, annot, ...) {
-  X[, rownames(subset(annot[colnames(X), ], ...))]
+subset_cols <- function(X, metadata, ...) {
+  X[, rownames(subset(metadata[colnames(X), , drop = FALSE], ...))]
 }
 
 
@@ -77,7 +77,6 @@ filterProbesets <- function(df1, percent_threshold, metadata_df = NULL,
     return(df1[selected_logvec,])
   } else {
     class_factor <- metadata_df[colnames(df1),"class_info"]
-    print(head(class_factor))
     logical_df <- data.frame(df1 != 0)
     list_logical_df <- split.default(logical_df, class_factor)
     list_logvec <- lapply(
@@ -85,7 +84,6 @@ filterProbesets <- function(df1, percent_threshold, metadata_df = NULL,
       function(df1) rowSums(df1) > (percent_threshold * ncol(df1))
     )
     combined_log_df <- do.call(cbind,list_logvec)
-    print(head(combined_log_df))
     selected_logvec <- apply(combined_log_df, 1, logical_func)
     # selected_logvec <- do.call(mapply, c(logical_func, list_logvec))
     print(paste("No. of probesets removed =",
@@ -98,8 +96,8 @@ filterProbesets <- function(df1, percent_threshold, metadata_df = NULL,
 #' Removes ambiguous and AFFY probesets from dataframe
 #' Rowname of affymetrix probesets
 removeProbesets <- function(df) {
-  logical_vec <- grepl("[0-9]_at", rownames(df)) & !startsWith(rownames(df),
-                                                               "AFFX")
+  logical_vec <- grepl("[0-9]_at", rownames(df)) &
+    !startsWith(rownames(df), "AFFX")
   print(paste0("No. of ambiguous and AFFY probesets removed: ",
                nrow(df) - sum(logical_vec)))
   return(df[logical_vec, , drop=F])
