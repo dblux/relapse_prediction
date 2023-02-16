@@ -487,54 +487,134 @@ predict_pipeline <- function(
   }
 }
 
-#' @param X dataframe of dim (n_features, n_samples)
-#' @param batch numeric of batch number to be imputed
-#' @param features features to be imputed
-#' @return r_sq matrix with dim (batch_size, n_samples)
-#' @return is_present dataframe with dim (n_features, n_samples)
-pairwise_lm <- function(X, metadata, batch, features = rownames(X)) {
-  is_batch <- metadata[colnames(X), "batch_info"] == batch
-  ids <- colnames(X)[is_batch]
-  ids_others <- colnames(X)[!is_batch]
 
-  is_present <- X[features, ] != 0
-  r_sq <- intercept <- slope <- matrix(
-    0, length(ids), ncol(X),
+#' Constructs linear models between all pairwise combinations of samples
+#'
+#' @param X dataframe of dim (n_features, n_samples)
+#' @param metadata dataframe of dim (n_samples, :)
+#' @param pos_ctrl positive control features 
+#' @param batch numeric of batch number to be imputed
+#' @return object of class pairwise, which is a list containing:
+#'   \item{rms} matrix of residual mean squares with dim (n_samples, n_samples)
+#'   \item{intercept} matrix of intercepts of all linear models with dim (n_samples, n_samples)
+#'   \item{residuals} array of residuals with dim (n_samples, n_samples, n_features)
+pairwise_lm <- function(
+  X, metadata, pos_ctrl, batch = NULL 
+) {
+  if (is.null(batch)) {
+    ids <- colnames(X)
+  } else {
+    is_batch <- metadata[colnames(X), "batch_info"] == batch
+    ids <- colnames(X)[is_batch]
+  }
+
+  rms <- intercepts <- matrix(
+    NA, length(ids), ncol(X),
     dimnames = list(ids, colnames(X))
+  )
+  residuals <- array(
+    NA, dim = c(length(ids), ncol(X), length(pos_ctrl)),
+    dimnames = list(ids, colnames(X), pos_ctrl) 
   )
   for (i in ids) {
     for (j in colnames(X)) {
       if (i != j) {
-        pair <- X[c(i, j)]
-        # only keep features where both values are not zero
+        # print(sprintf("%s ~ %s", i, j))
+        # only use positive control features to fit linear model
+        pair <- X[pos_ctrl, c(i, j)]
+        # only keep features where both values are not missing 
         pair <- log2(pair[rowSums(pair != 0) == 2, ])
         colnames(pair) <- c("y", "x")
-        summary_model <- summary(lm(y ~ x, data = pair))
-        r_sq[i, j] <- summary_model$r.squared
-        intercept[i, j] <- summary_model$coefficients["(Intercept)", "Estimate"]
-        slope[i, j] <- summary_model$coefficients["x", "Estimate"]
-      } else {
-        r_sq[i, j] <- NA 
-        intercept[i, j] <- 0 
-        slope[i, j] <- 1 
+        # slope of lm is fixed at 1
+        model <- lm(y - x ~ 1, data = pair)
+        residuals[i, j, rownames(pair)] <- model$residuals
+        # used residual mean square (rms) instead of rss with df of n - 1
+        # different pairs have different number of present features
+        rms[i, j] <- sum(model$residuals^2) / (nrow(pair) - 1)
+        intercepts[i, j] <- model$coefficients
       }
     }
   }
   pairwise <- list(
-    r_sq = r_sq, is_present = is_present,
-    intercept = intercept, slope = slope
+    rms = rms, intercepts = intercepts, residuals = residuals
   )
   class(pairwise) <- "pairwise"
-  
+
   pairwise
 }
 
 
-impute_partial <- function(X, pairwise, k = 5) {
-  r_sq <- pairwise$r_sq
-  is_present <- pairwise$is_present
+#' @param features character of features to test for consistent bias. features
+#' has to be be in pairwise$residuals
+# Assumption: residuals is a symmetric matrix
+bias.pairwise <- function(
+  pairwise, metadata, group, features = NULL,
+  missing_threshold = 0.5, min_sample = 5
+) {
+  if (is.null(features))
+    features <- dimnames(residuals)[[3]]
+
+  residuals <- pairwise$residuals
+  ids <- colnames(residuals)
+  batches <- as.character(sort(unique(metadata[ids, group])))
+  pvalues <- array(
+    NA, dim = c(length(batches), length(batches), length(features)),
+    dimnames = list(batches, batches, features)
+  )
+  means <- array(
+    NA, dim = c(length(batches), length(batches), length(features)),
+    dimnames = list(batches, batches, features)
+  )
+  for (feature in features) {
+    residuals_feature <- as.numeric(residuals[, , feature])
+    pct_missing <- sum(is.na(residuals_feature)) / length(residuals_feature)
+    if (pct_missing > missing_threshold) {
+      cat(sprintf(
+        "%s has %.1f%% missing residuals.\n", feature, pct_missing * 100
+      ))
+      next
+    }
+    for (i in seq_along(batches)) {
+      batch_i <- ids[metadata[ids, group]  == batches[i]]
+      for (j in seq(i)) {
+        batch_j <- ids[metadata[ids, group]  == batches[j]]
+        residuals_vec <- if (i != j) {
+          as.numeric(residuals[batch_i, batch_j, feature])
+        } else {
+          # dealing with a symmetric matrix
+          residuals_mat <- residuals[batch_i, batch_j, feature]
+          residuals_mat[lower.tri(residuals_mat)]
+        }
+        # t.test handles na according to na.action (default is na.omit)
+        n_residuals <- length(na.omit(residuals_vec))
+        if (n_residuals < min_sample) {
+          cat(sprintf(
+            "Small sample size of %d between %s and %s. T-test not performed.\n",
+            n_residuals, batches[[i]], batches[[j]]
+          ))
+          next
+        }
+        ttest <- t.test(residuals_vec)
+        pvalues[batches[i], batches[j], feature] <- ttest$p.value
+        means[batches[i], batches[j], feature] <- mean(residuals_vec, na.rm = TRUE)
+      }
+    }
+  }
+
+  list(pvalues = pvalues, means = means)
+}
+
+
+#' Impute missing values using pairwise linear models
+#'
+#' rownames(pairwise$rms) are the samples that will be imputed
+#' @param features character of features to be imputed
+impute.pairwise <- function(pairwise, X, features, k = 5) {
+  rms <- pairwise$rms
+  intercepts <- pairwise$intercepts
+  samples <- rownames(rms)  # samples to be imputed
+  is_present <- X[features, ] != 0 
   n_present <- colSums(is_present)
-  features <- rownames(is_present)
   
   # # filter out samples that cannot predict a single feature
   # # shift up to pairwise function
@@ -545,13 +625,13 @@ impute_partial <- function(X, pairwise, k = 5) {
   
   # each id has a predictions matrix of shape (n_missing_features, k)
   # different ids have different missing features
-  knn_predictions <- kneighbours <- vector("list", length = nrow(r_sq))
-  names(knn_predictions) <- rownames(r_sq)
-  names(kneighbours) <- rownames(r_sq)
-  for (id in rownames(r_sq)) {
+  knn_predictions <- kneighbours <- vector("list", length = nrow(rms))
+  names(knn_predictions) <- samples 
+  names(kneighbours) <- samples 
+  for (id in samples) {
     missing_features <- features[!is_present[, id]]
-    nearest_neighbours <- colnames(r_sq)[
-      order(as.numeric(r_sq[id, ]), decreasing = TRUE)]
+    nearest_neighbours <- colnames(rms)[
+      order(as.numeric(rms[id, ]), decreasing = TRUE)]
     
     predictions <- kns <- matrix(
       NA, length(missing_features), k,
@@ -561,13 +641,12 @@ impute_partial <- function(X, pairwise, k = 5) {
     knns <- nearest_neighbours[seq(k)]
     knns_npresent <- colSums(is_present[, knns])
     if (all(knns_npresent == length(missing_features))) {
-      print("knns are the same across all missing features!")
+      cat("knns are the same across all missing features!\n")
       for (i in seq(k)) {
         nn <- nearest_neighbours[i]
-        b_0 <- pairwise$intercept[id, nn]
-        b_1 <- pairwise$slope[id, nn]
+        b_0 <- intercepts[id, nn]
         for (feature in missing_features) {
-          predictions[feature, i] <- 2 ^ (b_0 + b_1 * log2(X[feature, nn]))
+          predictions[feature, i] <- 2^(b_0 + log2(X[feature, nn]))
         }
       }
       knn_predictions[[id]] <- predictions
@@ -589,12 +668,11 @@ impute_partial <- function(X, pairwise, k = 5) {
       i <- 1
       while (any(cnt <= k)) {
         nn <- nearest_neighbours[i]
-        b_0 <- pairwise$intercept[id, nn]
-        b_1 <- pairwise$slope[id, nn]
+        b_0 <- intercepts[id, nn]
         for (feature in missing_features) {
           if (is_present[feature, nn] && cnt[feature] <= k) {
             predictions[feature, cnt[feature]] <-
-              2 ^ (b_0 + b_1 * log2(X[feature, nn]))
+              2^(b_0 + log2(X[feature, nn]))
             kns[feature, cnt[feature]] <- nn
             cnt[feature] <- cnt[feature] + 1
           }
@@ -623,57 +701,54 @@ impute_partial <- function(X, pairwise, k = 5) {
 #'
 #' @param X dataframe of shape (n_features, n) with raw expression values
 #' @param metadata dataframe of shape (n, n_info)
-#' @param affy_positive character containing positive control affymetrix probesets
-#' @param @return dataframe of shape (n_affy, n) ?
+#' @param affy_pos_ctrl character containing positive control affymetrix probesets
+#' @param batches numeric consisting of target batches to scale
+#' @param @return dataframe of shape (n_affy, n)
 scale_batch_affy <- function(
-  X, metadata, affy_positive,
+  X, metadata, affy_pos_ctrl, trim = 0.02,
   batches = NULL, plot = FALSE
 ) {
   if (is.null(batches))
-    batches <- levels(metadata$batch_info)
-  
+    batches <- sort(unique(metadata[colnames(X), "batch_info"]))
+  batches <- as.character(batches)
+  classes <- as.character(sort(unique(metadata[colnames(X), "class_info"])))
+
   is_affy <- startsWith(rownames(X), 'AFFX')
-  X_affy <- X[affy_positive, ]
+  X_affy <- X[affy_pos_ctrl, ]
   X_notaffy <- X[!is_affy, ]
   affy_ratio <- data.frame(
     # mean of non-missing values only!
-    mean_affy = colSums(X_affy) / colSums(X_affy != 0),
-    mean_notaffy = colSums(X_notaffy) / colSums(X_notaffy != 0),
+    mean_affy = sapply(X_affy, mean, trim = trim),
+    mean_notaffy = sapply(X, mean, trim = trim),
     metadata[colnames(X), ]
   )
   
-  ax <- ggplot(affy_ratio) +
-    geom_point(
-      aes(
-        x = mean_notaffy, y = mean_affy,
-        col = batch_info, shape = class_info
-      ), cex = 2
-    )
+  for (cls in classes) {
+    slopes <- sapply(batches, function(batch) {
+      grp_ratio <- subset(affy_ratio, batch_info == batch & class_info == cls)
+      # linear model with no intercept
+      unname(coef(lm(mean_notaffy ~ mean_affy + 0, data = grp_ratio)))
+    })
+    target_slope <- median(slopes)
+    cat(sprintf("Class %s (median slope = %.3f):\n", cls, target_slope))
+    
+    for (batch in names(slopes)) {
+      slope <- slopes[batch]
+      scale_factor <- target_slope / slope
+      samples <- rownames(subset(
+        affy_ratio, batch_info == batch & class_info == cls
+      ))
+      X_notaffy[, samples] <- X_notaffy[, samples] * scale_factor
+      cat(sprintf(
+        "Scaled batch %s with original slope of %.3f to %.3f\n",
+        batch, slope, target_slope
+      ))
+    }
+    cat("\n")
+  }  
+  X_scaled <- rbind(X_notaffy, X[is_affy, ])
+  if (!identical(rownames(X), rownames(X_scaled)))
+    warning("Order of rows have not been preserved!")
   
-  slopes <- sapply(batches, function(batch) {
-    batch_ratio <- subset(affy_ratio, batch_info == batch)
-    # if batch is missing from data
-    if (nrow(batch_ratio) == 0)
-      return(NA)    
-    # linear model with no intercept
-    unname(coef(lm(mean_affy ~ mean_notaffy + 0, data = batch_ratio)))
-  })
-  slopes <- na.omit(slopes)
-  target_slope <- mean(slopes, trim = 0.5)
-  
-  for (batch in names(slopes)) {
-    slope <- slopes[batch]
-    batch_scale_factor <- target_slope / slope
-    is_batch <- metadata[colnames(X), "batch_info"] == batch
-    X_affy[, is_batch] <- X_affy[, is_batch] * batch_scale_factor
-    cat(sprintf(
-      "Scaled batch %s with original slope of %.2f to %.2f\n",
-      as.character(batch), slope, target_slope
-    ))
-  }
-  
-  if (plot)
-    return(list(X = X_affy, plot = ax))
-
-  X_affy
+  X_scaled
 }

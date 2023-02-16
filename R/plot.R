@@ -22,7 +22,7 @@ ggplot_pca <- function(
   y_idx <- as.numeric(substring(y, 3))
   
   # PCA
-  pca_obj <- prcomp(t(X), scale = TRUE)
+  pca_obj <- prcomp(t(X))
   Z <- data.frame(pca_obj$x)
   eigenvalues <- (pca_obj$sdev)^2
   var_pc <- eigenvalues/sum(eigenvalues)
@@ -39,7 +39,7 @@ ggplot_pca <- function(
   # Concat with metadata
   metadata_cols <- unlist(list(...))
   metadata1 <- metadata[rownames(Z), metadata_cols, drop = F]
-  Z_metadata <- cbind(rownames_to_column(Z), metadata1)
+  Z_metadata <- cbind(tibble::rownames_to_column(Z), metadata1)
   Z_metadata$rowname <- substring(Z_metadata$rowname, 1, 4)
       
   ax <- ggplot(
@@ -129,7 +129,7 @@ ggplot_umap <- function(
   
   metadata_cols <- unlist(list(...))
   metadata1 <- metadata[colnames(X), metadata_cols, drop = F]
-  Z_metadata <- cbind(rownames_to_column(Z), metadata1)
+  Z_metadata <- cbind(tibble::rownames_to_column(Z), metadata1)
   Z_metadata$rowname <- substring(Z_metadata$rowname, 1, 4)
   
   ax <- ggplot(
@@ -404,7 +404,7 @@ plot_vectors <- function(
 ) {
   # PCA
   if (pca) {
-    pca_obj <- prcomp(t(X), scale = TRUE)
+    pca_obj <- prcomp(t(X))
     pca_df <- data.frame(pca_obj$x[,1:2])
     n <- nrow(pca_df)
     d0_pca <- pca_df[1:((n-3) / 2),]
@@ -498,7 +498,7 @@ plot_boxplot <- function(
     "paste('P(Remission|', bold(x['D33']), ', s)')"
   )
  
-  X_y <- rownames_to_column(X_y)
+  X_y <- tibble::rownames_to_column(X_y)
   features <- colnames(X_y)
   # All features aside from those in feature_order are gathered
   patient_info <- unique(setdiff(features, feature_order))
@@ -707,7 +707,7 @@ plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
                       ratio_list = list(2,1,1)) {
   if (is.null(pc_labels)) {
     print("PCA performed!")
-    pca_obj <- prcomp(t(df), center = T, scale. = F)
+    pca_obj <- prcomp(t(df)) 
     pca_df <- as.data.frame(pca_obj$x[,1:3])
     eigenvalues <- (pca_obj$sdev)^2
     var_pc <- eigenvalues[1:3]/sum(eigenvalues)
@@ -756,7 +756,7 @@ plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
                       ratio_list = list(2,1,1)) {
   if (is.null(pc_labels)) {
     print("PCA performed!")
-    pca_obj <- prcomp(t(df), center = T, scale. = F)
+    pca_obj <- prcomp(t(df))
     pca_df <- as.data.frame(pca_obj$x[,1:3])
     eigenvalues <- (pca_obj$sdev)^2
     var_pc <- eigenvalues[1:3]/sum(eigenvalues)
@@ -841,13 +841,14 @@ plotHeatmapSubtype <- function(X, metadata_df) {
   return(heatmap_subtype)
 }
 
-
+#' @import dplyr
 plot_mean <- function(df, batch_vec1) {
   # Melt dataframe
   melt_df <- gather(df, key = "ID", value = "value")
   print(head(melt_df))
   # Trimmed mean probe intensities for each chip
-  mean_tibble <- melt_df %>% group_by(ID) %>%
+  mean_tibble <- melt_df %>%
+    group_by(ID) %>%
     summarise(mean = mean(value))
   mean_batch_tibble <- cbind(mean_tibble,
                              batch_vec1 = batch_vec1[mean_tibble$ID])
@@ -896,8 +897,7 @@ plotExplore <- function(df1, metadata_df) {
   # Plot PCA
   # Filters out rows with all zero values
   nonzero_logvec <- rowSums(df1) != 0 & apply(df1, 1, var) != 0
-  pca_obj <- prcomp(t(df1[nonzero_logvec,]),
-                    center = T, scale. = F)
+  pca_obj <- prcomp(t(df1[nonzero_logvec,]))
   pca_df <- data.frame(pca_obj$x[,1:4])
   eigenvalues <- (pca_obj$sdev)^2
   var_pc <- eigenvalues[1:5]/sum(eigenvalues)

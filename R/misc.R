@@ -131,9 +131,11 @@ calc_var_preservation <- function(df_bef, df_aft) {
 #' @param batch_info vector containing batch labels of samples (ordered the same way as in the dataframe)
 #' @param class_info vector containing class labels of samples (ordered the same way as in the dataframe)
 #' @return vector containing total proportion of variance in dataframe due to batch effects and biological variable of interest, respectively
-calc_var_prop <- function(df, batch_info, class_info) {
+calc_var_prop <- function(
+  df, metadata, batch_name = "batch_info", class_name = "class_info"
+) {
   # Tranpose df to n x p
-  pca_obj <- prcomp(t(df), center = T, scale. = F)
+  pca_obj <- prcomp(t(df))
   # Eigenvalues
   pca_df <- data.frame(pca_obj$x)
   eig_value <- (pca_obj$sdev)^2
@@ -146,9 +148,11 @@ calc_var_prop <- function(df, batch_info, class_info) {
     # Argument: ANOVA attributes; Calculates percentage of variance
     # SS_between/SS_between + SS_within
     calc_var_percentage <- function(vec) unname(vec[3]/(vec[3] + vec[4]))
-    pc_metadata <- data.frame(pc = vec,
-                              batch = as.factor(batch_info),
-                              class = as.factor(class_info))
+    pc_metadata <- data.frame(
+      pc = vec,
+      batch = metadata[rownames(pca_df), batch_name],
+      class = metadata[rownames(pca_df), class_name]
+    )
     batch_anova_attr <- unlist(summary(aov(pc~batch, data = pc_metadata)))
     class_anova_attr <- unlist(summary(aov(pc~class, data = pc_metadata)))
     return(c(calc_var_percentage(batch_anova_attr),
@@ -164,4 +168,34 @@ calc_var_prop <- function(df, batch_info, class_info) {
   metrics <- c(total_batch_pct, total_class_pct)
   names(metrics) <- c("var_batch", "var_class")
   return(metrics)
+}
+
+#' Sums up distances between batches for all classes in PCA transformed data
+calc_batch_dist <- function(
+  X, metadata, batch_name = "batch_info", class_name = "class_info"
+) {
+  pca_obj <- prcomp(t(X))
+  X_pca <- data.frame(pca_obj$x)
+  dists <- numeric(ncol(X_pca))
+  names(dists) <- colnames(X_pca)
+  for (i in seq(ncol(X_pca))) {
+    pc_i <- data.frame(
+      pc = X_pca[, i],
+      batch = metadata[rownames(X_pca), batch_name],
+      class = metadata[rownames(X_pca), class_name]
+    )
+    classes <- unique(pc_i$class)
+    dist_i <- 0
+    for (c in classes) {
+      pc_class <- pc_i[pc_i$class == c, ]
+      batches <- unique(pc_class$batch)
+      pc_batches <- lapply(batches, function(b) pc_class[pc_class$batch == b, ])
+      medians <- sapply(pc_batches, function(X) median(X[, 1]))
+      dist_mat <- dist(medians)^2
+      dist_i <- dist_i + sum(dist_mat)
+    }
+    dists[i] <- dist_i 
+  }
+
+  dists
 }
