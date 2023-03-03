@@ -125,6 +125,41 @@ calc_var_preservation <- function(df_bef, df_aft) {
   return(sum(apply(df_aft, 1, var))/sum(apply(df_bef, 1, var)))
 }
 
+
+#' Calculates proportion of variance in dataframe due to batch effects
+#' 
+#' @param X dataframe with dim (n_samples, n_features) 
+#' @param batch vector containing batch labels of samples (ordered the same way as in the dataframe)
+#' @param pca logical indicating whether to perform PCA on X
+#' @return numeric containing total proportion of variance in dataframe due to batch effects
+calc_var_pct <- function(X, batch, pca = TRUE) {
+  .calc_var_pct <- function(y) {
+    single_feature <- data.frame(y, batch)
+    summary_aov <- unlist(summary(aov(y ~ batch, data = single_feature)))
+    # SS_between / (SS_between + SS_within)
+    unname(summary_aov[3] / (summary_aov[3] + summary_aov[4]))
+  }
+  if (nrow(X) != length(batch))
+    stop("Length of batch vector does not match no. of samples in X")
+
+  if (pca) {
+    cat("X is PCA transformed.\n")
+    pca_obj <- prcomp(X)
+    X <- data.frame(pca_obj$x)
+    eigenvalues <- (pca_obj$sdev) ^ 2
+    # Percentage variance of each feature
+    feature_pct <- eigenvalues / sum(eigenvalues)
+  } else {
+    variance <- apply(X, 2, var)
+    stopifnot(length(variance) == ncol(X))
+    feature_pct <- variance / sum(variance)
+  }
+  batch_var_pct <- apply(X, 2, .calc_var_pct)
+  stopifnot(length(batch_var_pct) == ncol(X))
+  
+  sum(batch_var_pct * feature_pct)
+}
+
 #' Calculates proportion of variance in dataframe due to batch effects and biological variable of interest
 #' 
 #' @param df p x n gene expression dataframe (p: no. of probes, n: no. of samples)
@@ -171,11 +206,17 @@ calc_var_prop <- function(
 }
 
 #' Sums up distances between batches for all classes in PCA transformed data
+#'
+#' @param X dataframe of dim (n_features, n_samples)
 calc_batch_dist <- function(
-  X, metadata, batch_name = "batch_info", class_name = "class_info"
+  X, metadata, pca = TRUE, batch_name = "batch_info", class_name = "class_info"
 ) {
-  pca_obj <- prcomp(t(X))
-  X_pca <- data.frame(pca_obj$x)
+  if (pca) {
+    pca_obj <- prcomp(t(X))
+    X_pca <- data.frame(pca_obj$x)
+  } else {
+    X_pca <- t(X)
+  }
   dists <- numeric(ncol(X_pca))
   names(dists) <- colnames(X_pca)
   for (i in seq(ncol(X_pca))) {

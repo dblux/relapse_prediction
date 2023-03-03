@@ -375,6 +375,7 @@ predict_pipeline <- function(
     "erm1_ratio2", "l2norm_ratio2",
     "angle_LD0_LD8_ratio2", "log_mrd_d33"
   ),
+  return_genes = FALSE,
   direction = c("<", "<", "<", ">")
 ) {
   if (!is.null(sid_train_test)) {
@@ -412,6 +413,9 @@ predict_pipeline <- function(
   cat(sprintf("No. of DE features = %d\n", length(class_genes)))
   cat(sprintf("No. of final features = %d\n", length(selected_genes)))
   
+  if (return_genes)
+    return(selected_genes)
+
   # Subtype and normal samples
   if (is.null(sid_train_test)) {
     response <- t(X_subtype[selected_genes, ])
@@ -447,9 +451,8 @@ predict_pipeline <- function(
   }
   stopifnot(!any(is.na(V_sub))) # assert no NA values 
   
-  if (return_features) {
+  if (return_features)
     return(na.omit(V))
-  }
 
   # If sid_train_test is supplied, returns predictions for both train and test
   if (!is.null(sid_train_test)) {

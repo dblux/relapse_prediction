@@ -207,7 +207,7 @@ ggplot_roc <- function(
   
   if (length(predictor) == 1) {
     # Single ROC curve
-    roc_objs <- roc(
+    roc_objs <- pROC::roc(
       X[[response]],
       X[[predictor]],
       direction = direction,
@@ -230,10 +230,9 @@ ggplot_roc <- function(
       stop("Length of direction not equals to that of predictor!")
     }
     
-    roc_objs <- lapply(
-      seq_along(predictor),
+    roc_objs <- lapply(seq_along(predictor),
       function(i) {
-        roc(
+        pROC::roc(
           X[[response]],
           X[[predictor[i]]],
           direction = direction[i],
@@ -244,13 +243,10 @@ ggplot_roc <- function(
       }
     )
     aucs <- sapply(roc_objs, function(obj) obj$auc)
-    list_d <- lapply(
-      roc_objs,
-      function(obj) data.frame(
-        FPR = 1 - obj$specificities,
-        TPR = obj$sensitivities
-      )
-    )
+    list_d <- lapply(roc_objs, function(obj) data.frame(
+      FPR = 1 - obj$specificities,
+      TPR = obj$sensitivities
+    ))
     list_d <- lapply(list_d, function(d) d[nrow(d):1, ])
     d <- do.call(rbind, list_d)
     n_rows <- sapply(list_d, nrow)
@@ -400,7 +396,7 @@ plot_roc <- function(score_list, label_vec,
 #' @param X dataframe with features x samples and containing
 #' D0, D8 and 3 Normal patients (ordered correctly)
 plot_vectors <- function(
-  X, metadata_df, pca = T, cex = 3, main = NULL
+  X, metadata, pca = T, cex = 3, main = NULL
 ) {
   # PCA
   if (pca) {
@@ -417,8 +413,8 @@ plot_vectors <- function(
     norm_pca <- pca_df[(n-2):n,]
     
     # Obtaining batch and class annotations
-    label <- as.factor(metadata_df[rownames(d0_pca), "label"])
-    batch <- as.factor(metadata_df[rownames(d0_pca), "batch_info"])
+    label <- as.factor(metadata[rownames(d0_pca), "label"])
+    batch <- as.factor(metadata[rownames(d0_pca), "batch_info"])
     
     # Axis labels
     eigenvalues <- (pca_obj$sdev)^2
@@ -431,12 +427,12 @@ plot_vectors <- function(
   
   scatter_pca <- ggplot(data = subtype_pca) +
     geom_point(
-      aes(x = start_x, y = start_y), 
-      shape = 15, size = cex, show.legend = T
+      aes(x = start_x, y = start_y, fill = batch), 
+      shape = 21, size = cex, show.legend = T
     ) +
     geom_point(
-      aes(x = end_x, y = end_y),
-      shape = 16, size = cex, show.legend = F
+      aes(x = end_x, y = end_y, fill = batch),
+      shape = 22, size = cex, show.legend = F
     ) +
     geom_segment(
       aes(x = start_x, y = start_y, xend = end_x, yend = end_y, colour = label),
@@ -449,8 +445,8 @@ plot_vectors <- function(
       data = norm_pca,
       aes(x = PC1, y = PC2),
       size = cex, shape = 17
-    ) # +
-    # scale_color_manual(values = c('black', 'red'))
+    ) +
+    scale_color_manual(values = COL_LABEL)
   
   if (pca) {
     scatter_pca <- scatter_pca +
@@ -511,15 +507,230 @@ plot_boxplot <- function(
     labels = feature_labels
   )
   
+  ax_jitter <- ggplot(long_X_y) +
+    facet_wrap(
+      ~feature,
+      nrow = 1, scales = "free",
+      labeller = label_parsed
+    ) +
+    geom_boxplot(
+      aes_string(x = group, y = 'value'),
+      col = "black", alpha = 0,
+      show.legend = show.legend
+    ) +
+    # geom_text(
+    #   aes(col = label),
+    #   position = position_jitterdodge(jitter.width = 1, seed = 1),
+    #   cex = 2.5, show.legend = FALSE
+    # ) + 
+    scale_shape_manual(values = pch_treatment) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(angle = 15),
+      axis.title.y = element_blank()
+      # legend.position = "none"
+    )
+
+  ### Plot options ###
+  if (fill == 'label') {
+    ax_jitter <- ax_jitter + scale_fill_manual(values = COL_LABEL)
+  }
+
+  # if user specificies pch
+  if ('pch' %in% names(aes_extra)) {
+    ax_jitter <- ax_jitter +
+      geom_point(
+        aes_string(x = group, y = 'value', fill = fill, ...),
+        position = position_jitterdodge(jitter.width = 1, seed = 1),
+        cex = 2.5, alpha = 1, col = "black", show.legend = show.legend
+      )
+  } else {
+    ax_jitter <- ax_jitter +
+      geom_point(
+        aes_string(x = group, y = 'value', fill = fill, ...),
+        position = position_jitterdodge(jitter.width = 1, seed = 1),
+        pch = 21, cex = 2.5, alpha = 1, col = "black",
+        show.legend = show.legend
+      )
+  }
+
+  # Jitter plot: p-value label
+  has_classes <- length(table(X_y[[group]])) > 1
+  # Both group sizes must be > 1
+  has_samples <- min(table(X_y[[group]])) > 1
+  if (p.value && has_classes && has_samples) {
+    stat_label <- sapply(feature_order, function(idx) {
+      x1_x2 <- split(X_y[, idx], X_y[[group]])
+      tryCatch(
+        {
+          # Wilcoxon test p-value
+          x1 <- x1_x2[[1]]
+          x2 <- x1_x2[[2]]
+          htest <- wilcox.test(x1, x2, exact = T)
+          mean_diff <- mean(x1) - mean(x2)
+          # Cohen's d assuming unequal var. Hence sd = sqrt((s_1^2 + s_2^2)/2)
+          sd_unequal <- mean(c(var(x1), var(x2))) ^ .5
+          cohen_d <- mean_diff / sd_unequal
+          sprintf("p = %.3f\nd = %.2f", htest$p.value, cohen_d)
+        },
+        error = function(err) {
+          print(err)
+          return(err)
+        }
+      )
+    })
+   
+    x_coord <- rep(1.55, 6)
+    x_coord[4] <- 0.55
+
+    compute_ycoord <- function(x) 0.92 * (max(x) - min(x)) + min(x)
+    y_coord <- c(
+      compute_ycoord(X_y[feature_order[1]]),
+      compute_ycoord(X_y[feature_order[2]]),
+      compute_ycoord(X_y[feature_order[3]]),        
+      compute_ycoord(X_y[feature_order[4]]),
+      compute_ycoord(X_y[feature_order[5]]),
+      compute_ycoord(X_y[feature_order[6]])
+    )
+    
+    ann_text <- data.frame(
+      feature = factor(feature_order, levels = feature_order, labels = feature_labels),
+      x_coord = x_coord,
+      y_coord = y_coord, 
+      stat_label = stat_label
+    )
+    ann_text <- na.omit(ann_text)
+    
+    ax_jitter <- ax_jitter +
+      geom_text(
+        data = ann_text,
+        aes(x = x_coord, y = y_coord, label = stat_label),
+        size = 3, hjust = 0 # colour = "black"
+      )
+  }
+  
+  ax_jitter
+}
+
+
+#' Plots boxplots according to colour and shape provided
+#' No statistical tests conducted between groups.
+#' Plots both proba (D8) and (D33)
+#'
+#' @param colour_by string indicating name feature to group colour by
+#' @import ggplot2
+#' @importFrom tidyr gather
+#' @export
+plot_boxplots_v2 <- function(X_y, colour_by, shape_by) {
+  FEAT_ORDER <- c(
+    "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
+    "log_mrd_d33", "p_d8", "p_d33"
+  )
+  FEAT_LABS <- c(
+    "'ERM Ratio'", "'ARM Ratio'", "theta",
+    "log[10](MRD)", "paste('P(Remission|', bold(x[D8]), ', s)')",
+    "paste('P(Remission|', bold(x[D33]), ', s)')"
+  )
+ 
+  long_X_y <- gather(
+    X_y, key = "feature", value = "value",
+    -c(colour_by, shape_by)
+  )
+  # Reorder levels and label features
+  long_X_y$feature <- factor(
+    long_X_y$feature,
+    levels = FEAT_ORDER,
+    labels = FEAT_LABS
+  )
+  
+  ax_jitter <- ggplot(
+    long_X_y,
+    aes_string(x = colour_by, y = "value")
+  ) +
+    # geom_boxplot(
+    #   aes_string(group = colour_by),
+    #   col = "black", alpha = 0,
+    #   show.legend = F
+    # ) +
+    geom_point(
+      aes_string(fill = colour_by, shape = shape_by),
+      position = position_jitterdodge(jitter.width = 1),
+      cex = 2.5, alpha = 1, show.legend = F
+    ) +
+    scale_shape_manual(values = 21:22) +
+    facet_wrap(
+      ~feature,
+      nrow = 1, scales = "free",
+      labeller = label_parsed
+    ) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(angle = 15),
+      axis.title.y = element_blank(),
+      legend.position = "none"
+    )
+  
+  ax_jitter
+}
+
+
+#' Plots boxplot of features
+#' Provides p-values from wilcoxon rank-sum test
+#' If different group and color is provided X_y is flattened accordingly
+#'
+#' @import ggplot2
+#' @importFrom tibble rownames_to_column
+#' @importFrom tidyr gather
+#' @export
+plot_boxplot1 <- function(
+  X_y,
+  features = c("erm1_ratio2", "l2norm_ratio2", "angle_LD0_LD8_ratio2", "log_mrd_d33"),
+  group = 'label',
+  fill = 'label',
+  p.value = TRUE,
+  show.legend = FALSE,
+  ...
+) {
+  aes_extra <- list(...)
+  pch_treatment <- 21:24
+  names(pch_treatment) <- c('SR', 'IR', 'HR1', 'HR2')
+  
+  # Assert that all features are present in data provided
+  feature_idx <- sapply(features, match, colnames(X_y))
+  stopifnot(!is.na(sum(feature_idx)))
+  
+  # WARNING: Manual inputted values 
+  feature_order <- c(features, "p_d8", "p_d33")
+  feature_labels <- c(
+    "'ERM Ratio'", "'ARM Ratio'", "phi",
+    "log[10](MRD)", "paste('P(Remission|', bold(x['D8']), ', s)')",
+    "paste('P(Remission|', bold(x['D33']), ', s)')"
+  )
+ 
+  X_y <- tibble::rownames_to_column(X_y)
+  features <- colnames(X_y)
+  # All features aside from those in feature_order are gathered
+  patient_info <- unique(setdiff(features, feature_order))
+  print(patient_info)
+  long_X_y <- gather(X_y, key = "feature", value = "value", -patient_info)
+  print(long_X_y) 
+
+  # Reorder levels and label features
+  long_X_y$feature <- factor(
+    long_X_y$feature,
+    levels = feature_order,
+    labels = feature_labels
+  )
+  
   ax_jitter <- ggplot(
     long_X_y,
     aes_string(x = group, y = 'value', label = 'rowname', fill = fill)
   ) +
-    geom_boxplot(
-      aes_string(group = group),
-      col = "black", alpha = 0,
-      show.legend = show.legend
-    ) +
+    # geom_boxplot(
+    #   aes_string(group = group),
+    #   col = "black", alpha = 0,
+    #   show.legend = show.legend
+    # ) +
     # geom_text(
     #   aes(col = label),
     #   position = position_jitterdodge(jitter.width = 1, seed = 1),
@@ -615,67 +826,6 @@ plot_boxplot <- function(
         size = 3, hjust = 0 # colour = "black"
       )
   }
-  
-  ax_jitter
-}
-
-
-#' Plots boxplots according to colour and shape provided
-#' No statistical tests conducted between groups.
-#' Plots both proba (D8) and (D33)
-#'
-#' @param colour_by string indicating name feature to group colour by
-#' @import ggplot2
-#' @importFrom tidyr gather
-#' @export
-plot_boxplots_v2 <- function(X_y, colour_by, shape_by) {
-  FEAT_ORDER <- c(
-    "erm1_ratio2", "l2norm_ratio2", "angle_d0d8_d0normal",
-    "log_mrd_d33", "p_d8", "p_d33"
-  )
-  FEAT_LABS <- c(
-    "'ERM Ratio'", "'ARM Ratio'", "theta",
-    "log[10](MRD)", "paste('P(Remission|', bold(x[D8]), ', s)')",
-    "paste('P(Remission|', bold(x[D33]), ', s)')"
-  )
- 
-  long_X_y <- gather(
-    X_y, key = "feature", value = "value",
-    -c(colour_by, shape_by)
-  )
-  # Reorder levels and label features
-  long_X_y$feature <- factor(
-    long_X_y$feature,
-    levels = FEAT_ORDER,
-    labels = FEAT_LABS
-  )
-  
-  ax_jitter <- ggplot(
-    long_X_y,
-    aes_string(x = colour_by, y = "value")
-  ) +
-    # geom_boxplot(
-    #   aes_string(group = colour_by),
-    #   col = "black", alpha = 0,
-    #   show.legend = F
-    # ) +
-    geom_point(
-      aes_string(fill = colour_by, shape = shape_by),
-      position = position_jitterdodge(jitter.width = 1),
-      cex = 2.5, alpha = 1, show.legend = F
-    ) +
-    scale_shape_manual(values = 21:22) +
-    facet_wrap(
-      ~feature,
-      nrow = 1, scales = "free",
-      labeller = label_parsed
-    ) +
-    theme(
-      axis.title.x = element_blank(),
-      axis.text.x = element_text(angle = 15),
-      axis.title.y = element_blank(),
-      legend.position = "none"
-    )
   
   ax_jitter
 }
