@@ -125,39 +125,108 @@ calc_var_preservation <- function(df_bef, df_aft) {
   return(sum(apply(df_aft, 1, var))/sum(apply(df_bef, 1, var)))
 }
 
+sum_squares <- function(x) sum((x - mean(x)) ^ 2)
 
 #' Calculates proportion of variance in dataframe due to batch effects
 #' 
-#' @param X dataframe with dim (n_samples, n_features) 
-#' @param batch vector containing batch labels of samples (ordered the same way as in the dataframe)
+#' @param X dataframe with dim (n_features, n_samples) 
+#' @param batch vector containing batch labels of samples (ordered the same way as in X)
+#' @param class vector containing class labels of samples (ordered the same way as in X)
 #' @param pca logical indicating whether to perform PCA on X
 #' @return numeric containing total proportion of variance in dataframe due to batch effects
-calc_var_pct <- function(X, batch, pca = TRUE) {
-  .calc_var_pct <- function(y) {
-    single_feature <- data.frame(y, batch)
-    summary_aov <- unlist(summary(aov(y ~ batch, data = single_feature)))
+calc_var_pct <- function(X, batch, class = NULL, ret.obj = FALSE, pca = FALSE) {
+  oneway_anova <- function(y, group) {
+    single_feature <- data.frame(y, group)
+    summary_aov <- unlist(summary(aov(y ~ group, data = single_feature)))
     # SS_between / (SS_between + SS_within)
-    unname(summary_aov[3] / (summary_aov[3] + summary_aov[4]))
-  }
-  if (nrow(X) != length(batch))
-    stop("Length of batch vector does not match no. of samples in X")
+    ss_between <- summary_aov[3]
+    ss_within <- summary_aov[4]
 
-  if (pca) {
+    list(
+      ss_between = ss_between,
+      ss_total = sum_squares(y)
+    )
+  }
+  
+  X[is.na(X)] <- 0
+  X_t <- t(X)
+  batch <- as.character(batch)
+  if (!is.null(class))
+    class <- as.character(class)
+
+  if (length(unique(batch)) == 1) {
+    cat("All samples are from the same batch (pi = 0)\n")
+    # Use NA as is.na works on lists
+    return(list(percentage = 0, features = NA))
+  }
+  if (nrow(X_t) != length(batch))
+    stop("Length of batch vector does not match no. of samples in X")
+  
+  # TODO: Remove PCA -> PCA does not work for recursive ss calculation
+  if (pca & is.null(class)) {
     cat("X is PCA transformed.\n")
-    pca_obj <- prcomp(X)
-    X <- data.frame(pca_obj$x)
+    pca_obj <- prcomp(X_t)
+    Z <- data.frame(pca_obj$x)
     eigenvalues <- (pca_obj$sdev) ^ 2
     # Percentage variance of each feature
     feature_pct <- eigenvalues / sum(eigenvalues)
   } else {
-    variance <- apply(X, 2, var)
-    stopifnot(length(variance) == ncol(X))
+    variance <- apply(X_t, 2, var)
+    stopifnot(length(variance) == ncol(X_t))
     feature_pct <- variance / sum(variance)
+    Z <- X_t
   }
-  batch_var_pct <- apply(X, 2, .calc_var_pct)
-  stopifnot(length(batch_var_pct) == ncol(X))
   
-  sum(batch_var_pct * feature_pct)
+  if (is.null(class)) {
+    anova_objs <- apply(Z, 2, oneway_anova, batch)
+    ss_between_batch <- sapply(anova_objs, function(obj) obj$ss_between)
+    ss_total_class <- sapply(anova_objs, function(obj) obj$ss_total)
+    stopifnot(length(ss_between_batch) == ncol(Z))
+    pi_total <- sum(ss_between_batch) / sum(ss_total_class) 
+    if (ret.obj) {
+      return(list(
+        percentage = pi_total,
+        features = data.frame(
+          ss_between = ss_between_batch,
+          ss_total = ss_total_class
+        )
+      ))
+    } else {
+      return(pi_total)
+    }
+  } else {
+    Z_classes <- split.data.frame(Z, class)
+    classes_string <- do.call(paste, as.list(names(Z_classes)))
+    cat(sprintf("Split into classes: %s\n", classes_string))
+    Z_t_classes <- lapply(Z_classes, t)
+    batch_classes <- split(batch, class)
+    # Warning: Recursive call
+    objs <- mapply(
+      calc_var_pct, Z_t_classes, batch_classes,
+      MoreArgs = list(class = NULL, ret.obj = TRUE, pca = pca),
+      SIMPLIFY = FALSE
+    )
+    ss_total <- apply(Z, 2, sum_squares)
+    features_classes <- lapply(objs, function(obj) obj$features)
+    # filters out obj$features == NA
+    features_classes <- features_classes[!is.na(features_classes)]
+    ss_batch_classes <- lapply(
+      features_classes, function(X) X$ss_between
+    )
+    stopifnot(is.list(ss_batch_classes))
+    ss_batch <- Reduce(`+`, ss_batch_classes)
+    stopifnot(length(ss_batch) == length(ss_total))
+    pi_total <- sum(ss_batch) / sum(ss_total)
+    if (ret.obj) {
+      return(list(
+        pi_total = pi_total,
+        pi_classes = sapply(objs, function(obj) obj$percentage),
+        features = data.frame(ss_batch, ss_total)
+      ))
+    } else {
+      return(pi_total)
+    }
+  }
 }
 
 #' Calculates proportion of variance in dataframe due to batch effects and biological variable of interest
