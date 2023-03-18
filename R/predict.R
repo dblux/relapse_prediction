@@ -438,8 +438,13 @@ predict_pipeline <- function(
   }
   
   V_sub <- V[features] # select features and specify order
+  
+  if (return_features)
+    return(V_sub) # returns patients that have NA MRD values
+  
   V_sub <- na.omit(V_sub) # Removes patients that have NA MRD values
   pid_omitted <- setdiff(rownames(V), rownames(V_sub))
+  print(pid_omitted)
   if (length(pid_omitted) > 0) {
     sid_omitted <- c(
       paste0(pid_omitted, '_D0'),
@@ -451,8 +456,6 @@ predict_pipeline <- function(
   }
   stopifnot(!any(is.na(V_sub))) # assert no NA values 
   
-  if (return_features)
-    return(na.omit(V))
 
   # If sid_train_test is supplied, returns predictions for both train and test
   if (!is.null(sid_train_test)) {

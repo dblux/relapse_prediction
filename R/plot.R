@@ -67,15 +67,23 @@ ggplot_pca <- function(
 #' @import ggplot2
 #' @importFrom tidyr gather
 #' @export
+#' @param X dataframe with features as rows and samples as columns
+#' @param metadata dataframe of metadata with samples as rows
 ggplot_top_pc <- function(
-  X, metadata, x_axis, n = 8, cex = 2, newdata = NULL, ...
+  X, metadata, x_axis, n = 8, nrow = 2,
+  cex = 2, show.legend = FALSE, show.xaxis = TRUE,
+  newdata = NULL, ...
 ) {
   # PCA
   pca_obj <- prcomp(t(X))
-  Z <- data.frame(pca_obj$x[, 1:n])
-  eigenvalues <- (pca_obj$sdev)^2
-  var_pc <- eigenvalues[1:n]/sum(eigenvalues)
-  pc_labels <- sprintf("PC%d (%.2f%%)", 1:n, var_pc*100)
+  if (ncol(pca_obj$x) < n) {
+    n <- ncol(pca_obj$x)
+    cat(sprintf("PCA transformed matrix only has %d dimensions!\n", n))
+  }
+  Z <- data.frame(pca_obj$x[, seq(n)])
+  eigenvalues <- (pca_obj$sdev) ^2
+  var_pc <- eigenvalues[seq(n)] / sum(eigenvalues)
+  pc_labels <- sprintf("PC%d (%.2f%%)", seq(n), var_pc*100)
   names(pc_labels) <- paste0('PC', seq_len(length(pc_labels)))
 
   # Projects newdata into PCA space
@@ -91,23 +99,29 @@ ggplot_top_pc <- function(
   plot_factors <- unique(c(x_axis, plot_factors))
   metadata1 <- metadata[rownames(Z), plot_factors, drop = F]
   Z_metadata <- cbind(Z, metadata1)
-  
   # Convert data to long format
   Z_long <- tidyr::gather(Z_metadata, key = "PC", value = "value", -plot_factors)
   
-  ggplot(Z_long, aes_string(x = x_axis, y = "value", ...)) +
+  ax <- ggplot(Z_long, aes_string(x = x_axis, y = "value", ...)) +
     facet_wrap(
-      ~PC, scales = 'free_y', nrow = 2,
+      ~PC, scales = 'free_y', nrow = nrow,
       labeller = as_labeller(pc_labels),
     ) +
     geom_point(
       position = position_jitterdodge(jitter.width = 1),
-      cex = cex, alpha = 0.8
-    ) +
-    theme(
-      axis.text.x = element_blank(),
-      axis.ticks.x = element_blank()
+      cex = cex, alpha = 0.8,
+      show.legend = show.legend
     )
+  
+  if (!show.xaxis) {
+    ax <- ax +
+      theme(
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()
+      )
+  }
+  
+  ax 
 }
 
 
@@ -853,15 +867,18 @@ rglplot_scatter <- function(
 
 
 # 3D PCA plot
-plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
-                      ratio_list = list(2,1,1)) {
+plot3d_pca <- function(
+  df, colour, pch, pc_labels = NULL,
+  cex = 0.5, lwd = 0.5,
+  width = 600, height = 400,
+  ratio_list = list(2, 1, 1)
+) {
   if (is.null(pc_labels)) {
     print("PCA performed!")
     pca_obj <- prcomp(t(df)) 
     pca_df <- as.data.frame(pca_obj$x[,1:3])
     eigenvalues <- (pca_obj$sdev)^2
     var_pc <- eigenvalues[1:3]/sum(eigenvalues)
-    print(var_pc)
     pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
   } else {
     print("No PCA performed!")
@@ -869,65 +886,29 @@ plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
   }
   
   # RGL plot parameters
-  rgl.open()
-  rgl.bg(color="white")
-  rgl.viewpoint(zoom = 0.8)
-  # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
-  par3d(windowRect = c(50, 20, 500, 500))
-  with(pca_df, pch3d(PC1, PC2, PC3, bg = colour,
-                     pch = pch, cex = 0.5, lwd = 1.5))
-  box3d(col = "black")
-  title3d(xlab = pc_labels[1], ylab = pc_labels[2],
-          zlab = pc_labels[3], col = "black")
-  # Plot aspect ratios of axis according to variance
-  do.call(aspect3d, ratio_list)
-}
-
-
-# Plot PCA 3D: Batch effects
-# Plot batches in different colours and classes in different shapes
-plotPCA3DBatchEffects <- function(df1, metadata_df) {
-  # Batch and class annotations
-  batch_factor <- metadata_df[colnames(df1), "batch_info"]
-  batch_palette <- generateGgplotColours(length(unique(batch_factor)))
-  batch_colour <- batch_palette[batch_factor]
-  
-  class_factor <- metadata_df[colnames(df1), "class_info"]
-  all_pch <- 21:25
-  # Error if there are more classes than pch symbols (> 5)
-  stopifnot(length(unique(class_factor)) <= 5)
-  class_pch <- all_pch[class_factor]
-  plotPCA3D(df1, batch_colour, class_pch)
-}
-
-
-# 3D PCA plot
-plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
-                      ratio_list = list(2,1,1)) {
-  if (is.null(pc_labels)) {
-    print("PCA performed!")
-    pca_obj <- prcomp(t(df))
-    pca_df <- as.data.frame(pca_obj$x[,1:3])
-    eigenvalues <- (pca_obj$sdev)^2
-    var_pc <- eigenvalues[1:3]/sum(eigenvalues)
-    print(var_pc)
-    pc_labels <- sprintf("PC%d (%.2f%%)", 1:3, var_pc*100)
-  } else {
-    print("No PCA performed!")
-    pca_df <- as.data.frame(df)
+  if (rgl.cur() == 0) {
+    rgl.open()
+    rgl.bg(color = "white")
   }
-  
-  # RGL plot parameters
-  rgl.open()
-  rgl.bg(color="white")
-  rgl.viewpoint(zoom = 0.8)
+  rgl.clear(type = "all")  
+  # rgl.viewpoint(zoom = 0.8)
   # rgl.viewpoint(theta = 110, phi = 5, zoom = 0.8)
-  par3d(windowRect = c(50, 20, 500, 500))
-  with(pca_df, pch3d(PC1, PC2, PC3, bg = colour,
-                     pch = pch, cex = 0.5, lwd = 1.5))
+  
+  # figure size
+  window <- c(0, 0, width, height) + 50
+  par3d(windowRect = window) 
+  
+  with(pca_df, pch3d(
+    PC1, PC2, PC3,
+    bg = colour, pch = pch,
+    cex = cex, lwd = 0.5
+  ))
   box3d(col = "black")
-  title3d(xlab = pc_labels[1], ylab = pc_labels[2],
-          zlab = pc_labels[3], col = "black")
+  title3d(
+    xlab = pc_labels[1], ylab = pc_labels[2],
+    zlab = pc_labels[3], col = "black"
+  )
+  
   # Plot aspect ratios of axis according to variance
   do.call(aspect3d, ratio_list)
 }
@@ -935,39 +916,19 @@ plotPCA3D <- function(df, colour, pch, pc_labels = NULL,
 
 # Plot PCA before selecting features
 # Batch information of all the timepoints
-plotPCA3DYeoh <- function(df1, metadata_df) {
-  batch_info <- metadata_df[colnames(df1), "batch_info"]
-  generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-  batch_palette <- generate_colour(10)
-  # batch_palette <- brewer.pal(10, "Set3")
-  batch_colour <- batch_palette[batch_info]
-  # Shape of all timepoints
-  class_info <- metadata_df[colnames(df1), "class_info"]
-  print(levels(class_info))
-  levels(class_info) <- 21:23
-  timepoint_shape <- as.numeric(as.character(class_info))
-  plotPCA3D(df1, batch_colour, timepoint_shape)
-}
-
-
-# Plot PCA before selecting features
-# Batch information of all the timepoints
-plotPCA3DYeoh1 <- function(df1, metadata_df) {
-  batch_info <- metadata_df[colnames(df1), "batch_info"]
-  batch_factor <- droplevels(as.factor(batch_info))
-  print(batch_factor)
-  print(levels(batch_factor))
-  levels(batch_factor) <- 21:22
-  pch <- as.numeric(as.character(batch_factor))
-  # generate_colour <- colorRampPalette(c("lightblue", "darkblue"))
-  # batch_palette <- generate_colour(10)
+plot3d_yeoh <- function(X, metadata, ...) {
+  # colour
+  batch <- metadata[colnames(X), "batch_info"]
+  batch_levels <- sort(unique(batch))
+  batch_palette <- ggplot_palette(length(batch_levels))
+  names(batch_palette) <- batch_levels
+  sample_colour <- batch_palette[as.character(batch)]
+  # shape
+  class <- metadata[colnames(X), "class_info"]
+  levels(class) <- 21:23
+  sample_shape <- as.numeric(as.character(class))
   
-  # Shape of all timepoints
-  class_info <- metadata_df[colnames(df1), "subtype"]
-  palette <- brewer.pal(10, "Set3")
-  col <- palette[class_info]
-  
-  plotPCA3D(df1, col, pch)
+  plot3d_pca(X, sample_colour, sample_shape, ...)
 }
 
 
