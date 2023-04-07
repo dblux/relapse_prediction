@@ -129,99 +129,14 @@ calc_var_preservation <- function(df_bef, df_aft) {
 #' Calculates sum of squares in a vector
 #'
 #' @param x numeric vector
-sum_squares <- function(x) sum((x - mean(x)) ^ 2)
-
-
-#' Calculates proportion of variance in dataframe due to batch effects
-#' 
-#' @param X dataframe with dim (n_features, n_samples) 
-#' @param batch vector containing batch labels of samples (ordered the same way as in X)
-#' @param class vector containing class labels of samples (ordered the same way as in X)
-#' @param ret.obj logical indicating whether to return object or proportion of variance
-#' @param pca logical indicating whether to perform PCA on X
-#' @return numeric containing total proportion of variance in dataframe due to batch effects
-PVB <- function(X, batch, class = NULL, ret.obj = FALSE, pca = FALSE) {
-  X[is.na(X)] <- 0
-  X_t <- t(X)
-  batch <- as.character(batch)
-  if (!is.null(class))
-    class <- as.character(class)
-
-  if (length(unique(batch)) == 1) {
-    cat("All samples are from the same batch (pi = 0)\n")
-    # Use NA as is.na works on lists
-    return(list(percentage = 0, features = NA))
-  }
-  if (nrow(X_t) != length(batch))
-    stop("Length of batch vector does not match no. of samples in X")
-  
-  # TODO: Remove PCA -> PCA does not work for recursive ss calculation
-  if (pca & is.null(class)) {
-    cat("X is PCA transformed.\n")
-    pca_obj <- prcomp(X_t)
-    Z <- data.frame(pca_obj$x)
-    eigenvalues <- (pca_obj$sdev) ^ 2
-    # Percentage variance of each feature
-    feature_pct <- eigenvalues / sum(eigenvalues)
-  } else {
-    variance <- apply(X_t, 2, var)
-    stopifnot(length(variance) == ncol(X_t))
-    feature_pct <- variance / sum(variance)
-    Z <- X_t
-  }
-  
-  if (is.null(class)) {
-    feature_means <- colMeans(Z)
-    ss_total_class <- colSums(sweep(Z, 2, feature_means, `-`) ^ 2)
-    Z_batches <- split.data.frame(Z, batch)
-    batch_means <- sapply(Z_batches, function(Z) colMeans(Z))
-    nperbatches <- sapply(Z_batches, nrow)
-    squares <- (batch_means - feature_means) ^ 2
-    ss_between_batch <- rowSums(sweep(squares, 2, nperbatches, `*`))
-
-    stopifnot(length(ss_between_batch) == ncol(Z))
-    pi_total <- sum(ss_between_batch) / sum(ss_total_class) 
-    if (ret.obj) {
-      return(list(
-        percentage = pi_total,
-        sum.squares = data.frame(
-          ss_between = ss_between_batch,
-          ss_total = ss_total_class
-        )
-      ))
-    } else {
-      return(pi_total)
-    }
-  } else {
-    Z_classes <- split.data.frame(Z, class)
-    classes_string <- do.call(paste, as.list(names(Z_classes)))
-    cat(sprintf("Split into classes: %s\n", classes_string))
-    Z_t_classes <- lapply(Z_classes, t)
-    batch_classes <- split(batch, class)
-    # Warning: Recursive call
-    objs <- mapply(
-      PVB, Z_t_classes, batch_classes,
-      MoreArgs = list(class = NULL, ret.obj = TRUE, pca = pca),
-      SIMPLIFY = FALSE
-    )
-    ss_total <- colSums(sweep(Z, 2, colMeans(Z), `-`) ^ 2)
-    sumsquares_classes <- lapply(objs, function(obj) obj$sum.squares)
-    # filters out obj$features == NA
-    sumsquares_classes <- sumsquares_classes[!is.na(sumsquares_classes)]
-    ss_batch_classes <- lapply(sumsquares_classes, function(X) X$ss_between)
-    stopifnot(is.list(ss_batch_classes))
-    ss_batch <- Reduce(`+`, ss_batch_classes)
-    stopifnot(length(ss_batch) == length(ss_total))
-    pi_total <- sum(ss_batch) / sum(ss_total)
-    if (ret.obj) {
-      return(list(
-        percentage = pi_total,
-        percentage_classes = sapply(objs, function(obj) obj$percentage),
-        sum.squares = data.frame(ss_batch, ss_total)
-      ))
-    } else {
-      return(pi_total)
-    }
+#' @param x data.frame or matrix with dim (n_features, n_samples) 
+sum_squares <- function(x) {
+  if (is.vector(x)) {
+    return(sum((x - mean(x)) ^ 2))
+  } else if (is.matrix(x) | is.data.frame(x)) {
+    feat_means <- rowMeans(x)
+    squares <- (x - feat_means) ^ 2
+    return(sum(squares))
   }
 }
 
