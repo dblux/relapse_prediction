@@ -1,23 +1,15 @@
+# x : n x p matrix of genomic data
+# batch : length n vector indicating batch for each sample
+# filt : number of features to retain after filtering
+# nperm : number of permutations to perform during the permutation test
+# x2.imp : optional centered data matrix with imputed missing values 
+# center : logical, is the data centered?
+# scaleY : should Y be scaled based on number of samples in each batch?
+# seed : ability to set the seed for random sampling
 gPCA.batchdetect <- function(
   x,batch,filt=NULL,nperm=1000,center=FALSE,scaleY=FALSE,seed=NULL
 ){
-	
-	# x : n x p matrix of genomic data
-	# batch : length n vector indicating batch for each sample
-	# filt : number of features to retain after filtering
-	# nperm : number of permutations to perform during the permutation test
-	# x2.imp : optional centered data matrix with imputed missing values 
- 	# center : logical, is the data centered?
- 	# scaleY : should Y be scaled based on number of samples in each batch?
-  # seed : ability to set the seed for random sampling
   if(!is.null(seed)){set.seed(seed)}
-
-  # Permute batch:	
-  # permute<-matrix(NA,ncol=length(batch),nrow=50000)
-  # for (j in 1:50000) {permute[j,]<-sample(batch,replace=FALSE)}
-  # samp<-sample(1:dim(permute)[1],nperm,replace=FALSE)
-  # permute.samp<-permute[samp,]
-    
   # Center data:
   if(center==FALSE) {
     x2<-scale(x,center=T,scale=F)
@@ -103,47 +95,50 @@ gPCA.batchdetect <- function(
   # Calculate test statistic delta:
   delta<-diag(var.bat)[1]/diag(var.x)[1]
 
-
   ##########################################################
   ### Begin loop for random sample of batch permutations ###
-  # delta.p<-numeric()
-  # for ( i in seq_len(nperm) ) {
-  #   batch.p<-permute.samp[i,]
-  # 
-  #   y<-ys<-matrix(nrow=length(batch.p),ncol=length(unique(batch.p)))
-  #   for ( j in 1:length(unique(batch.p)) ) {
-  #     y[,j]<-ifelse(batch.p==j,1,0)
-  #   }
-  #   if (scaleY==FALSE) {
-  #     y2<-scale(y,center=T,scale=F) #y2.bat
-  #   } else {
-  #     nk<-apply(y,2,sum)
-  #     for ( j in 1:length(unique(batch.p)) ) {
-  #       ys[,j]<-ifelse(batch.p==j,1/nk[j],0)
-  #     }
-  #     y2<-scale(ys,center=F,scale=F) #y2.bat
-  #   }
-  # 
-  #   # Perform gPCA
-  #   svd.bat.p<-svd(t(y2)%*%data.imp)
-  # 
-  #   var.bat.p<-var(data.imp%*% svd.bat.p$v)
-  #   PC.g.p<-diag(var.bat.p)[1]/sum(diag(var.bat.p))
-  # 
-  #   delta.p[i]<- diag(var.bat.p)[1]/diag(var.x)[1]  #Alternative test statistic
-  # } # end of permutation loop
-  # 
-  # p.val<-sum(delta<delta.p)/length(delta.p)
-  # p.val<-ifelse(p.val==0,"<0.001",round(p.val,3))
-  
-  p.val <- delta.p <- NA
-  out<-list(
+  if (nperm > 0) {
+    permute<-matrix(NA,ncol=length(batch),nrow=50000)
+    for (j in 1:50000) {permute[j,]<-sample(batch,replace=FALSE)}
+    samp<-sample(1:dim(permute)[1],nperm,replace=FALSE)
+    permute.samp<-permute[samp,]
+    delta.p<-numeric()
+    for ( i in seq_len(nperm) ) {
+      batch.p<-permute.samp[i,]
+    
+      y<-ys<-matrix(nrow=length(batch.p),ncol=length(unique(batch.p)))
+      for ( j in 1:length(unique(batch.p)) ) {
+        y[,j]<-ifelse(batch.p==j,1,0)
+      }
+      if (scaleY==FALSE) {
+        y2<-scale(y,center=T,scale=F) #y2.bat
+      } else {
+        nk<-apply(y,2,sum)
+        for ( j in 1:length(unique(batch.p)) ) {
+          ys[,j]<-ifelse(batch.p==j,1/nk[j],0)
+        }
+        y2<-scale(ys,center=F,scale=F) #y2.bat
+      }
+    
+      # Perform gPCA
+      svd.bat.p<-svd(t(y2)%*%data.imp)
+    
+      var.bat.p<-var(data.imp%*% svd.bat.p$v)
+      PC.g.p<-diag(var.bat.p)[1]/sum(diag(var.bat.p))
+    
+      delta.p[i]<- diag(var.bat.p)[1]/diag(var.x)[1]  #Alternative test statistic
+    } # end of permutation loop
+    p.val<-sum(delta<delta.p)/length(delta.p)
+    p.val<-ifelse(p.val==0,"<0.001",round(p.val,3))
+  } else { 
+    p.val <- delta.p <- NA
+  }
+
+  list(
     delta=delta,p.val=p.val,delta.p=delta.p,
     batch=batch,filt=filt,n=n,p=p,b=b,
     PCg=PC.g,PCu=PC.u,varPCu1=varPCu1,varPCg1=varPCg1,nperm=nperm,
     cumulative.var.u=cumulative.var.u,
     cumulative.var.g=cumulative.var.g
   )
-
-  out
 }
